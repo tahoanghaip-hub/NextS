@@ -243,9 +243,33 @@ async function handleUnifiedCommand(msg, source = 'WIFI') {
 
       if (msg.autoMinimize) {
         keyController.restorePresentationFocus();
+        if (typeof global.onElectronWindowAction === 'function') {
+          global.onElectronWindowAction('MINIMIZE');
+        }
       }
 
       broadcastStateSync();
+      break;
+    }
+
+    case 'MINI_PILL':
+    case 'SET_VIEW_MODE': {
+      if (msg.viewMode === 'MINI_PILL' || msg.type === 'MINI_PILL') {
+        if (typeof global.onElectronWindowAction === 'function') {
+          global.onElectronWindowAction('MINI_PILL');
+        }
+      } else if (msg.viewMode === 'DESKTOP') {
+        if (typeof global.onElectronWindowAction === 'function') {
+          global.onElectronWindowAction('RESTORE');
+        }
+      }
+      break;
+    }
+
+    case 'RESTORE_WINDOW': {
+      if (typeof global.onElectronWindowAction === 'function') {
+        global.onElectronWindowAction('RESTORE');
+      }
       break;
     }
 
@@ -282,7 +306,6 @@ bleManager.on('message', async (msg, deviceId) => {
 app.get('/api/network-info', async (req, res) => {
   try {
     const interfaces = getAvailableIPv4Addresses();
-    const clientPort = req.query.clientPort || '5173';
     const requestedIp = req.query.ip;
 
     let selected = interfaces[0];
@@ -291,10 +314,18 @@ app.get('/api/network-info', async (req, res) => {
       if (match) selected = match;
     }
 
-    // Determine connection URL (Points to client Vite dev server on port 5173 or static host on 3000)
-    const distPath = path.join(__dirname, '../mobile-client/dist');
-    const isServingStatic = fs.existsSync(distPath);
-    const targetPort = isServingStatic ? PORT : clientPort;
+    // Determine connection URL (Points to Vite dev server port 5173 or static production host on 3000)
+    const clientDistPath = path.join(__dirname, '../mobile-client/dist');
+    const clientIndexPath = path.join(clientDistPath, 'index.html');
+    const isServingStatic = fs.existsSync(clientIndexPath);
+
+    let targetPort = '5173';
+    if (req.query.clientPort) {
+      targetPort = req.query.clientPort;
+    } else if (isServingStatic) {
+      targetPort = PORT;
+    }
+
     const connectUrl = `http://${selected.address}:${targetPort}`;
 
     // Generate crisp QR code
@@ -698,16 +729,35 @@ wss.on('connection', (ws, req) => {
 });
 
 // -------------------------------------------------------------
-// Static File Hosting (When client is built in production)
+// Static File Hosting & SPA Fallback (Production Single-Port Hosting)
 // -------------------------------------------------------------
 const clientDistPath = path.join(__dirname, '../mobile-client/dist');
-if (fs.existsSync(clientDistPath)) {
+const clientIndexPath = path.join(clientDistPath, 'index.html');
+const isServingStatic = fs.existsSync(clientIndexPath);
+
+if (isServingStatic) {
   console.log(`[Server] Serving production static files from ${clientDistPath}`);
   app.use(express.static(clientDistPath));
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(clientDistPath, 'index.html'));
-  });
 }
+
+app.get('*', (req, res) => {
+  if (isServingStatic) {
+    res.sendFile(clientIndexPath);
+  } else {
+    res.status(200).json({
+      status: 'NEXTS_HOST_RUNNING',
+      mode: 'DEV_BACKEND_ONLY',
+      serverPort: PORT,
+      message: 'NextS Host Server is active on port 3000. In development mode, access the Vite client at http://localhost:5173. For production single-port hosting, run "npm run build:client".',
+      endpoints: {
+        networkInfo: '/api/network-info',
+        state: '/api/state',
+        ws: '/ws',
+        bleStatus: '/api/ble/status'
+      }
+    });
+  }
+});
 
 // Start Server listening on 0.0.0.0:3000
 server.listen(PORT, '0.0.0.0', () => {

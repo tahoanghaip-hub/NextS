@@ -2,11 +2,13 @@
   "name": "nexts-desktop-host",
   "version": "1.0.0",
   "description": "NextS Desktop Host Server and Zero-Dependency Windows Key Controller",
-  "main": "server.js",
+  "main": "electron-main.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "electron": "electron .",
+    "build:exe": "electron-builder --win portable"
   },
   "dependencies": {
     "cors": "^2.8.5",

@@ -10,6 +10,7 @@ import SettingsModal from './components/SettingsModal';
 import QuickEditModal from './components/QuickEditModal';
 import ConnectionModal from './components/ConnectionModal';
 import ImportModal from './components/ImportModal';
+import SavedProjectsModal from './components/SavedProjectsModal';
 
 export default function App() {
   const { toastMessage, goToSlide, effectiveViewMode } = useApp();
@@ -20,6 +21,7 @@ export default function App() {
   const [isQuickEditOpen, setIsQuickEditOpen] = useState(false);
   const [quickEditTab, setQuickEditTab] = useState('structured');
   const [quickEditSlideNum, setQuickEditSlideNum] = useState(null);
+  const [isSavedProjectsOpen, setIsSavedProjectsOpen] = useState(false);
 
   // Import Modal state
   const [isImportOpen, setIsImportOpen] = useState(false);
@@ -75,6 +77,7 @@ export default function App() {
           onOpenSettingsModal={() => setIsSettingsOpen(true)}
           onOpenImportModal={() => handleOpenImport('file')}
           onOpenQuickEditModal={handleOpenQuickEdit}
+          onOpenSavedProjectsModal={() => setIsSavedProjectsOpen(true)}
         />
       )}
 
@@ -86,6 +89,7 @@ export default function App() {
             onOpenQuickEditModal={(tab) => handleOpenQuickEdit(tab || 'structured')}
             onOpenImportModal={() => handleOpenImport('file')}
             onOpenSettingsModal={() => setIsSettingsOpen(true)}
+            onOpenSavedProjectsModal={() => setIsSavedProjectsOpen(true)}
           />
 
           {/* Main Mobile Teleprompter Workspace (1/5 Sidebar + 4/5 Pager) */}
@@ -123,6 +127,11 @@ export default function App() {
         isOpen={isImportOpen}
         onClose={() => setIsImportOpen(false)}
         initialTab={importInitialTab}
+      />
+
+      <SavedProjectsModal
+        isOpen={isSavedProjectsOpen}
+        onClose={() => setIsSavedProjectsOpen(false)}
       />
     </div>
   );

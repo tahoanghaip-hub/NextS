@@ -1,0 +1,20 @@
+{
+  "appId": "com.novalyst.nexts",
+  "appName": "NextS Teleprompter",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "cleartext": true,
+    "allowNavigation": ["*"]
+  },
+  "plugins": {
+    "BluetoothLe": {
+      "displayStrings": {
+        "scanning": "Đang quét trạm thuyết trình SlideSync-Host...",
+        "cancel": "Hủy",
+        "availableDevices": "Thiết bị khả dụng",
+        "noDeviceFound": "Không tìm thấy thiết bị"
+      }
+    }
+  }
+}

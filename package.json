@@ -1,0 +1,11 @@
+{
+  "name": "nexts-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NextS - Auto-Slide Teleprompter & Presentation Synchronization Workspace",
+  "scripts": {
+    "build:client": "cd mobile-client && npm run build",
+    "start:host": "cd desktop-host && npm start",
+    "start:prod": "npm run build:client && npm run start:host"
+  }
+}

@@ -11,7 +11,8 @@ import {
   RotateCcw,
   Edit3,
   Settings,
-  Monitor
+  Monitor,
+  FolderKanban
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -19,7 +20,8 @@ export default function TopBar({
   onOpenConnectionModal,
   onOpenQuickEditModal,
   onOpenSettingsModal,
-  onOpenImportModal
+  onOpenImportModal,
+  onOpenSavedProjectsModal
 }) {
   const {
     presentationData,
@@ -106,6 +108,16 @@ export default function TopBar({
         >
           <FileUp className="w-3.5 h-3.5 text-blue-400" />
           <span className="hidden sm:inline">Import</span>
+        </button>
+
+        {/* Saved Presentations Library Button */}
+        <button
+          onClick={onOpenSavedProjectsModal}
+          title="Kho bài thuyết trình Offline & Sao lưu (.nexts.json)"
+          className="flex items-center space-x-1 px-2 py-1 rounded-lg text-xs font-medium theme-border border theme-bg-elevated theme-text-primary hover:opacity-80 transition"
+        >
+          <FolderKanban className="w-3.5 h-3.5 text-purple-400" />
+          <span className="hidden md:inline">Kho bài</span>
         </button>
 
         {/* Sync Lock Toggle Button */}

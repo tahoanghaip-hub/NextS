@@ -4,6 +4,7 @@ import { connectionManager } from '../services/ConnectionManager';
 
 const SETTINGS_STORAGE_KEY = 'nexts_app_settings_v1';
 const PRESENTATION_STORAGE_KEY = 'nexts_presentation_data_v1';
+const SAVED_LIBRARY_STORAGE_KEY = 'nexts_saved_library_v1';
 
 // Initial fallback presentation deck
 export const INITIAL_FALLBACK_PRESENTATION = {
@@ -84,6 +85,40 @@ export function AppProvider({ children }) {
     }
     return INITIAL_FALLBACK_PRESENTATION;
   });
+
+  // 3. Saved Presentations Library (persisted in localStorage under nexts_saved_library_v1)
+  const [savedLibrary, setSavedLibrary] = useState(() => {
+    try {
+      const stored = localStorage.getItem(SAVED_LIBRARY_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('[AppContext] Could not parse stored saved library:', e);
+    }
+    // Seed with initial presentation snapshot
+    return [
+      {
+        id: INITIAL_FALLBACK_PRESENTATION.id,
+        title: INITIAL_FALLBACK_PRESENTATION.title,
+        totalSlides: INITIAL_FALLBACK_PRESENTATION.totalSlides,
+        updatedAt: INITIAL_FALLBACK_PRESENTATION.updatedAt || Date.now(),
+        data: structuredClone(INITIAL_FALLBACK_PRESENTATION)
+      }
+    ];
+  });
+
+  // Sync savedLibrary changes to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(SAVED_LIBRARY_STORAGE_KEY, JSON.stringify(savedLibrary));
+    } catch (e) {
+      console.warn('[AppContext] Could not persist saved library:', e);
+    }
+  }, [savedLibrary]);
 
   // Active Pager Screen: 0 for Screen 1 (Script), 1 for Screen 2 (Q&A)
   const [activePagerScreen, setActivePagerScreen] = useState(0);
@@ -528,6 +563,216 @@ export function AppProvider({ children }) {
     showToast('Đã khôi phục dữ liệu mẫu 5 slides!');
   };
 
+  /**
+   * Helper to slugify presentation titles for safe bundle file names
+   */
+  const slugify = (text) => {
+    return (text || 'presentation')
+      .toString()
+      .toLowerCase()
+      .trim()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\w\s-]/g, '')
+      .replace(/[\s_-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'presentation';
+  };
+
+  /**
+   * 1. saveCurrentToLibrary(customTitle)
+   * Saves a snapshot of the current presentationData into savedLibrary.
+   */
+  const saveCurrentToLibrary = (customTitle) => {
+    const titleToUse = customTitle && customTitle.trim()
+      ? customTitle.trim()
+      : (presentationData.title || 'Bài thuyết trình NextS');
+
+    const targetId = presentationData.id || `pres-lib-${Date.now()}`;
+    const updatedDeck = {
+      ...presentationData,
+      id: targetId,
+      title: titleToUse,
+      updatedAt: Date.now()
+    };
+
+    setSavedLibrary((prev) => {
+      const existingIdx = prev.findIndex((item) => item.id === targetId);
+      const newEntry = {
+        id: targetId,
+        title: titleToUse,
+        totalSlides: updatedDeck.slides?.length || updatedDeck.totalSlides || 0,
+        updatedAt: updatedDeck.updatedAt,
+        data: structuredClone(updatedDeck)
+      };
+
+      let newLibrary;
+      if (existingIdx >= 0) {
+        newLibrary = [...prev];
+        newLibrary[existingIdx] = newEntry;
+      } else {
+        newLibrary = [newEntry, ...prev];
+      }
+
+      try {
+        localStorage.setItem(SAVED_LIBRARY_STORAGE_KEY, JSON.stringify(newLibrary));
+      } catch (err) {
+        console.warn('[AppContext] Error writing saved library to localStorage:', err);
+      }
+      return newLibrary;
+    });
+
+    // Also update presentation title if changed
+    if (presentationData.title !== titleToUse || presentationData.id !== targetId) {
+      setPresentationData(updatedDeck);
+      connectionManager.send({
+        type: 'UPDATE_SCRIPT',
+        payload: updatedDeck
+      });
+    }
+
+    showToast('Đã lưu bài thuyết trình vào Kho Offline!');
+  };
+
+  /**
+   * 2. loadFromLibrary(projectId)
+   * Loads the selected presentation from savedLibrary and syncs immediately to Host.
+   */
+  const loadFromLibrary = (projectId) => {
+    const entry = savedLibrary.find((item) => item.id === projectId);
+    if (!entry || !entry.data) {
+      showToast('Không tìm thấy bài thuyết trình trong Kho Offline!');
+      return;
+    }
+    updateScriptData(entry.data);
+    showToast(`Đã nạp bài thuyết trình "${entry.title}"!`);
+  };
+
+  /**
+   * 3. deleteFromLibrary(projectId)
+   * Removes presentation from savedLibrary and updates localStorage.
+   */
+  const deleteFromLibrary = (projectId) => {
+    setSavedLibrary((prev) => {
+      const newLibrary = prev.filter((item) => item.id !== projectId);
+      try {
+        localStorage.setItem(SAVED_LIBRARY_STORAGE_KEY, JSON.stringify(newLibrary));
+      } catch (err) {
+        console.warn('[AppContext] Error updating saved library in localStorage:', err);
+      }
+      return newLibrary;
+    });
+    showToast('Đã xóa bài thuyết trình khỏi Kho Offline.');
+  };
+
+  /**
+   * 4. exportPresentationBundle()
+   * Exports current presentationData (script, slide Q&A, general Q&A, WebP thumbnails) as .nexts.json.
+   */
+  const exportPresentationBundle = () => {
+    try {
+      const bundleData = {
+        version: '1.0.0',
+        exportedAt: new Date().toISOString(),
+        format: 'NEXTS_BUNDLE_V1',
+        presentationData: structuredClone(presentationData)
+      };
+
+      const jsonStr = JSON.stringify(bundleData, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const filename = `${slugify(presentationData.title || 'presentation')}.nexts.json`;
+
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      showToast(`Đã xuất file ${filename} thành công!`);
+    } catch (err) {
+      console.error('[AppContext] Error exporting presentation bundle:', err);
+      showToast('Lỗi xuất file .nexts.json: ' + err.message);
+    }
+  };
+
+  /**
+   * 5. importPresentationBundle(jsonFile)
+   * Reads a .nexts.json file, validates schema, updates state, and saves to savedLibrary.
+   */
+  const importPresentationBundle = async (jsonFile) => {
+    try {
+      let rawText = '';
+      if (typeof jsonFile === 'string') {
+        rawText = jsonFile;
+      } else if (jsonFile instanceof File || jsonFile instanceof Blob) {
+        rawText = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve(e.target.result);
+          reader.onerror = (err) => reject(err);
+          reader.readAsText(jsonFile, 'UTF-8');
+        });
+      } else {
+        throw new Error('Định dạng tệp không hợp lệ.');
+      }
+
+      const parsed = JSON.parse(rawText);
+      const deck = parsed.presentationData || (Array.isArray(parsed.slides) ? parsed : null);
+
+      if (!deck || !Array.isArray(deck.slides) || deck.slides.length === 0) {
+        throw new Error('File .nexts.json không đúng định dạng hoặc danh sách slides trống.');
+      }
+
+      const normalizedDeck = {
+        id: deck.id || `pres-bundle-${Date.now()}`,
+        title: deck.title || 'Bài thuyết trình nhập khẩu',
+        totalSlides: deck.slides.length,
+        currentSlide: 1,
+        isSyncLocked: true,
+        updatedAt: Date.now(),
+        slides: deck.slides.map((s, idx) => ({
+          slideNumber: s.slideNumber || idx + 1,
+          title: s.title || `Slide ${idx + 1}`,
+          scriptContent: s.scriptContent || '',
+          qaContent: s.qaContent || '',
+          thumbnailBase64: s.thumbnailBase64 || null
+        })),
+        generalQA: deck.generalQA || ''
+      };
+
+      // 1. Synchronize to Mobile and PC Host
+      updateScriptData(normalizedDeck);
+
+      // 2. Persist to savedLibrary
+      const newEntry = {
+        id: normalizedDeck.id,
+        title: normalizedDeck.title,
+        totalSlides: normalizedDeck.totalSlides,
+        updatedAt: normalizedDeck.updatedAt,
+        data: structuredClone(normalizedDeck)
+      };
+
+      setSavedLibrary((prev) => {
+        const filtered = prev.filter((item) => item.id !== normalizedDeck.id);
+        const updated = [newEntry, ...filtered];
+        try {
+          localStorage.setItem(SAVED_LIBRARY_STORAGE_KEY, JSON.stringify(updated));
+        } catch (e) {
+          console.warn('[AppContext] Storage error:', e);
+        }
+        return updated;
+      });
+
+      showToast(`Đã nhập gói .nexts.json thành công (${normalizedDeck.totalSlides} slides)!`);
+      return normalizedDeck;
+    } catch (err) {
+      console.error('[AppContext] Error importing presentation bundle:', err);
+      showToast('Lỗi nhập file .nexts.json: ' + (err.message || 'Không thể đọc file'));
+      throw err;
+    }
+  };
+
   const startPresentation = (enterMiniPill = false) => {
     connectionManager.send({
       type: 'START_PRESENTATION',
@@ -677,6 +922,12 @@ export function AppProvider({ children }) {
     toggleSyncLock,
     updateScriptData,
     resetToMockData,
+    savedLibrary,
+    saveCurrentToLibrary,
+    loadFromLibrary,
+    deleteFromLibrary,
+    exportPresentationBundle,
+    importPresentationBundle,
     startPresentation,
     copyAiPromptConvention,
     startTimer,

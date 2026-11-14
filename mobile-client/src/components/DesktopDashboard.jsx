@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Wifi,
   WifiOff,
@@ -38,7 +38,9 @@ import {
   Image as ImageIcon,
   Zap,
   Radio,
-  Power
+  Power,
+  FolderKanban,
+  Keyboard
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import {
@@ -53,7 +55,8 @@ import {
 export default function DesktopDashboard({
   onOpenSettingsModal,
   onOpenImportModal,
-  onOpenQuickEditModal
+  onOpenQuickEditModal,
+  onOpenSavedProjectsModal
 }) {
   const {
     settings,
@@ -116,6 +119,30 @@ export default function DesktopDashboard({
   const isConnected = connectionStatus.connected;
   const currentSlide = presentationData.currentSlide || 1;
   const totalSlides = presentationData.totalSlides || 1;
+
+  // -------------------------------------------------------------
+  // PC Keyboard Shortcuts Handler (←, →, PageUp, PageDown, Space)
+  // -------------------------------------------------------------
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Don't intercept if user is typing in form inputs, textareas, or contentEditable
+      const tag = e.target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) {
+        return;
+      }
+
+      if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') {
+        e.preventDefault();
+        stepSlide(1);
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        e.preventDefault();
+        stepSlide(-1);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [stepSlide]);
 
   // -------------------------------------------------------------
   // Column 1 Handlers: QR & Key Emulation
@@ -504,6 +531,28 @@ export default function DesktopDashboard({
 
         {/* Right: Switcher, Mini Pill, Theme, Settings */}
         <div className="flex items-center space-x-2">
+          {/* Keyboard Shortcut Hints */}
+          <div
+            className="hidden 2xl:flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-medium theme-border border theme-bg-elevated theme-text-secondary"
+            title="Phím tắt điều khiển slide trên máy tính: Mũi tên trái/phải, PageUp, PageDown, Phím cách"
+          >
+            <Keyboard className="w-3.5 h-3.5 text-blue-400" />
+            <span>Phím tắt:</span>
+            <kbd className="px-1 py-0.5 rounded text-[10px] font-mono theme-bg-surface theme-border border">←</kbd>
+            <kbd className="px-1 py-0.5 rounded text-[10px] font-mono theme-bg-surface theme-border border">→</kbd>
+            <kbd className="px-1 py-0.5 rounded text-[10px] font-mono theme-bg-surface theme-border border">Space</kbd>
+          </div>
+
+          {/* Saved Projects Library Button */}
+          <button
+            onClick={onOpenSavedProjectsModal}
+            title="Kho bài thuyết trình Offline & Sao lưu (.nexts.json)"
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold theme-border border theme-bg-elevated theme-text-primary hover:opacity-85 transition"
+          >
+            <FolderKanban className="w-3.5 h-3.5 text-purple-400" />
+            <span className="hidden xl:inline">Kho bài lưu</span>
+          </button>
+
           {/* Mobile View Switcher */}
           <button
             onClick={() => setViewMode('MOBILE')}
