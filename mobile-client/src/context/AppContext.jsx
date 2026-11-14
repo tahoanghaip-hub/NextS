@@ -3,9 +3,10 @@ import { DEFAULT_SETTINGS, AI_PROMPT_CONVENTION_TEXT } from '../constants/prompt
 import { connectionManager } from '../services/ConnectionManager';
 
 const SETTINGS_STORAGE_KEY = 'nexts_app_settings_v1';
+const PRESENTATION_STORAGE_KEY = 'nexts_presentation_data_v1';
 
 // Initial fallback presentation deck
-const INITIAL_FALLBACK_PRESENTATION = {
+export const INITIAL_FALLBACK_PRESENTATION = {
   id: 'pres-default-001',
   title: 'Chiến lược Chuyển đổi Số & Ứng dụng AI 2026',
   totalSlides: 5,
@@ -68,8 +69,24 @@ export function AppProvider({ children }) {
     return DEFAULT_SETTINGS;
   });
 
-  // 2. Presentation data state
-  const [presentationData, setPresentationData] = useState(INITIAL_FALLBACK_PRESENTATION);
+  // 2. Presentation data state (persisted in localStorage)
+  const [presentationData, setPresentationData] = useState(() => {
+    try {
+      const stored = localStorage.getItem(PRESENTATION_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && Array.isArray(parsed.slides) && parsed.slides.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('[AppContext] Could not parse stored presentation data:', e);
+    }
+    return INITIAL_FALLBACK_PRESENTATION;
+  });
+
+  // Active Pager Screen: 0 for Screen 1 (Script), 1 for Screen 2 (Q&A)
+  const [activePagerScreen, setActivePagerScreen] = useState(0);
 
   // 3. Network & Connection states
   const [connectionStatus, setConnectionStatus] = useState({
@@ -132,6 +149,17 @@ export function AppProvider({ children }) {
       console.error('[AppContext] Failed to save settings to localStorage:', err);
     }
   }, [settings]);
+
+  // Persist presentation data
+  useEffect(() => {
+    try {
+      if (presentationData && presentationData.slides) {
+        localStorage.setItem(PRESENTATION_STORAGE_KEY, JSON.stringify(presentationData));
+      }
+    } catch (err) {
+      console.error('[AppContext] Failed to save presentationData to localStorage:', err);
+    }
+  }, [presentationData]);
 
   // -------------------------------------------------------------
   // Screen WakeLock Management
@@ -295,7 +323,11 @@ export function AppProvider({ children }) {
       .then((res) => res.json())
       .then((data) => {
         if (data.presentationData) {
-          setPresentationData(data.presentationData);
+          // If local storage already has user-saved presentation data, keep it unless server has newer
+          const stored = localStorage.getItem(PRESENTATION_STORAGE_KEY);
+          if (!stored) {
+            setPresentationData(data.presentationData);
+          }
         }
         if (data.keyMapping) {
           setSettings((prev) => ({ ...prev, keyMapping: data.keyMapping }));
@@ -390,7 +422,26 @@ export function AppProvider({ children }) {
       payload: newPresentationData
     });
     setPresentationData(newPresentationData);
+    try {
+      localStorage.setItem(PRESENTATION_STORAGE_KEY, JSON.stringify(newPresentationData));
+    } catch (e) {
+      console.warn('[AppContext] Could not save updated script to localStorage:', e);
+    }
     showToast('Đã cập nhật kịch bản thuyết trình!');
+  };
+
+  const resetToMockData = () => {
+    try {
+      localStorage.setItem(PRESENTATION_STORAGE_KEY, JSON.stringify(INITIAL_FALLBACK_PRESENTATION));
+    } catch (e) {
+      console.warn('[AppContext] Could not write reset mock data to localStorage:', e);
+    }
+    setPresentationData(INITIAL_FALLBACK_PRESENTATION);
+    connectionManager.send({
+      type: 'UPDATE_SCRIPT',
+      payload: INITIAL_FALLBACK_PRESENTATION
+    });
+    showToast('Đã khôi phục dữ liệu mẫu 5 slides!');
   };
 
   const startPresentation = () => {
@@ -448,6 +499,8 @@ export function AppProvider({ children }) {
   const value = {
     settings,
     presentationData,
+    activePagerScreen,
+    setActivePagerScreen,
     connectionStatus,
     networkInfo,
     timerSeconds,
@@ -464,6 +517,7 @@ export function AppProvider({ children }) {
     adjustDesync,
     toggleSyncLock,
     updateScriptData,
+    resetToMockData,
     startPresentation,
     copyAiPromptConvention,
     startTimer,
