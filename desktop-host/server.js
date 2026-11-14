@@ -17,6 +17,7 @@ import {
   parsePptxBuffer,
   mergeScriptAndSlideDeck
 } from './parsers/docSlideParser.js';
+import { bleHostManager as bleManager } from './bleServer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -105,7 +106,9 @@ function broadcast(message) {
 }
 
 /**
- * Broadcast current state sync snapshot
+ * Dual-Transport Broadcast:
+ * 1. Sends full payload with WebP thumbnails to Wi-Fi WebSocket clients
+ * 2. Sends thumbnail-free, MTU-chunked lightweight payload to Bluetooth BLE clients
  */
 function broadcastStateSync() {
   broadcast({
@@ -114,7 +117,159 @@ function broadcastStateSync() {
     connectionMode: 'WIFI',
     keyMapping: currentKeyMapping
   });
+
+  bleManager.broadcastBleState(
+    getPayloadForTransport(presentationData, 'BLE'),
+    currentKeyMapping
+  );
 }
+
+/**
+ * Unified Command Handler
+ * Executes identically whether command originates from Wi-Fi WebSocket or Bluetooth BLE GATT
+ */
+async function handleUnifiedCommand(msg, source = 'WIFI') {
+  if (!msg || !msg.type) return;
+  console.log(`[Unified Command] Source: ${source}, Type: ${msg.type}`);
+
+  switch (msg.type) {
+    case 'GOTO_SLIDE': {
+      const target = Number(msg.targetSlide);
+      if (isNaN(target)) break;
+
+      const clampedTarget = Math.max(1, Math.min(presentationData.totalSlides, target));
+      const shouldJump = presentationData.isSyncLocked || msg.force === true;
+
+      if (shouldJump) {
+        const jumpResult = await keyController.jumpToSlide(
+          presentationData.currentSlide,
+          clampedTarget,
+          currentKeyMapping
+        );
+
+        presentationData.currentSlide = clampedTarget;
+        presentationData.updatedAt = Date.now();
+
+        broadcastStateSync();
+        broadcast({
+          type: 'KEY_EXEC_RESULT',
+          success: true,
+          action: 'GOTO_SLIDE',
+          currentSlide: presentationData.currentSlide,
+          stepsSent: jumpResult.stepsSent,
+          timestamp: Date.now()
+        });
+      } else {
+        // Free preview mode without emulating hardware keys
+        presentationData.currentSlide = clampedTarget;
+        presentationData.updatedAt = Date.now();
+        broadcastStateSync();
+      }
+      break;
+    }
+
+    case 'STEP_SLIDE': {
+      const direction = msg.direction; // 'NEXT' | 'PREV' | 'BLACKOUT'
+      const keyResult = keyController.sendSingleKey(direction, currentKeyMapping);
+
+      if (direction === 'NEXT' && presentationData.currentSlide < presentationData.totalSlides) {
+        presentationData.currentSlide += 1;
+        presentationData.updatedAt = Date.now();
+      } else if (direction === 'PREV' && presentationData.currentSlide > 1) {
+        presentationData.currentSlide -= 1;
+        presentationData.updatedAt = Date.now();
+      }
+
+      broadcastStateSync();
+      broadcast({
+        type: 'KEY_EXEC_RESULT',
+        success: keyResult.success,
+        action: direction,
+        currentSlide: presentationData.currentSlide,
+        timestamp: Date.now()
+      });
+      break;
+    }
+
+    case 'ADJUST_DESYNC': {
+      const offset = Number(msg.offset);
+      const direction = offset > 0 ? 'NEXT' : 'PREV';
+      const keyResult = keyController.sendSingleKey(direction, currentKeyMapping);
+
+      console.log(`[Anti-Desync] Nudged projector by ${offset > 0 ? '+1' : '-1'} (${direction}). Slide pointer unchanged: ${presentationData.currentSlide}`);
+
+      broadcast({
+        type: 'KEY_EXEC_RESULT',
+        success: keyResult.success,
+        action: 'ADJUST_DESYNC',
+        offset,
+        currentSlide: presentationData.currentSlide,
+        timestamp: Date.now()
+      });
+      break;
+    }
+
+    case 'TOGGLE_SYNC_LOCK': {
+      presentationData.isSyncLocked = Boolean(msg.isSyncLocked);
+      presentationData.updatedAt = Date.now();
+      broadcastStateSync();
+      break;
+    }
+
+    case 'UPDATE_SCRIPT': {
+      if (msg.payload && Array.isArray(msg.payload.slides)) {
+        presentationData = {
+          ...msg.payload,
+          currentSlide: Math.max(1, Math.min(msg.payload.totalSlides || msg.payload.slides.length, msg.payload.currentSlide || 1)),
+          totalSlides: msg.payload.slides.length,
+          updatedAt: Date.now()
+        };
+        broadcastStateSync();
+      }
+      break;
+    }
+
+    case 'UPDATE_KEYMAP': {
+      if (['ARROWS', 'PAGEDOWN', 'SPACE'].includes(msg.keyMapping)) {
+        currentKeyMapping = msg.keyMapping;
+        broadcastStateSync();
+      }
+      break;
+    }
+
+    case 'START_PRESENTATION': {
+      presentationData.isSyncLocked = true;
+      presentationData.updatedAt = Date.now();
+
+      if (msg.autoMinimize) {
+        keyController.restorePresentationFocus();
+      }
+
+      broadcastStateSync();
+      break;
+    }
+
+    case 'GET_STATE': {
+      const mode = msg.connectionMode === 'BLE' ? 'BLE' : 'WIFI';
+      if (source.startsWith('WIFI')) {
+        broadcastStateSync();
+      } else {
+        bleManager.broadcastBleState(getPayloadForTransport(presentationData, 'BLE'), currentKeyMapping);
+      }
+      break;
+    }
+
+    default:
+      console.warn(`[Unified Command] Unrecognized message type: ${msg.type}`);
+  }
+}
+
+// -------------------------------------------------------------
+// BLE Manager Event Wiring
+// -------------------------------------------------------------
+bleManager.on('message', async (msg, deviceId) => {
+  await handleUnifiedCommand(msg, `BLE (${deviceId})`);
+});
 
 // -------------------------------------------------------------
 // REST API Endpoints
@@ -122,7 +277,7 @@ function broadcastStateSync() {
 
 /**
  * GET /api/network-info
- * Returns available IPv4 adapters, currently selected IP, connection URL, and QR code data URL.
+ * Returns available IPv4 adapters, currently selected IP, connection URL, QR code, and BLE status.
  */
 app.get('/api/network-info', async (req, res) => {
   try {
@@ -159,7 +314,8 @@ app.get('/api/network-info', async (req, res) => {
       connectUrl,
       qrDataUrl,
       serverPort: PORT,
-      isServingStatic
+      isServingStatic,
+      bleStatus: bleManager.getStatus()
     });
   } catch (err) {
     console.error('[Server] Error generating network info:', err);
@@ -169,15 +325,87 @@ app.get('/api/network-info', async (req, res) => {
 
 /**
  * GET /api/state
- * Returns current presentation state and active settings (supports transport=BLE query)
+ * Returns current presentation state, active settings, and BLE status
  */
 app.get('/api/state', (req, res) => {
   const transport = req.query.transport === 'BLE' ? 'BLE' : 'WIFI';
   res.json({
     presentationData: getPayloadForTransport(presentationData, transport),
     keyMapping: currentKeyMapping,
-    connectedClients: wss.clients.size
+    connectedClients: wss.clients.size,
+    bleStatus: bleManager.getStatus()
   });
+});
+
+/**
+ * GET /api/ble/status
+ * Returns live status of Windows WinRT BLE GATT Advertisement server
+ */
+app.get('/api/ble/status', (req, res) => {
+  res.json(bleManager.getStatus());
+});
+
+/**
+ * POST /api/ble/toggle
+ * Enables or disables Host BLE advertising
+ */
+app.post('/api/ble/toggle', (req, res) => {
+  const enabled = req.body?.enabled !== false;
+  const status = enabled ? bleManager.startAdvertising() : bleManager.stopAdvertising();
+  res.json(status);
+});
+
+/**
+ * POST /api/ble/connect
+ * Registers a BLE client handshake and returns initial sync chunks
+ */
+app.post('/api/ble/connect', (req, res) => {
+  const { deviceId, deviceName } = req.body || {};
+  const device = bleManager.simulateClientConnect(deviceName || 'Android Teleprompter (BLE)');
+  if (deviceId) {
+    device.id = deviceId;
+  }
+  const initialSyncChunks = bleManager.broadcastBleState(
+    getPayloadForTransport(presentationData, 'BLE'),
+    currentKeyMapping
+  );
+
+  res.json({
+    success: true,
+    device,
+    status: bleManager.getStatus(),
+    initialSyncChunks
+  });
+});
+
+/**
+ * POST /api/ble/frame
+ * Receives raw MTU frames (single or chunked) and returns pending notification frames
+ */
+app.post('/api/ble/frame', (req, res) => {
+  const { rawFrame, deviceId } = req.body || {};
+  if (!rawFrame) {
+    return res.status(400).json({ error: 'rawFrame is required' });
+  }
+
+  const targetDeviceId = deviceId || 'ble-web-tunnel-01';
+  const result = bleManager.receiveBleRawFrame(rawFrame, targetDeviceId);
+  const pendingChunks = bleManager.drainPendingChunks(targetDeviceId);
+
+  res.json({
+    ...result,
+    pendingChunks
+  });
+});
+
+/**
+ * GET /api/ble/pending
+ * Polls queued notification chunks for tunnel clients
+ */
+app.get('/api/ble/pending', (req, res) => {
+  const deviceId = req.query.deviceId || '__global__';
+  const pendingChunks = bleManager.drainPendingChunks(deviceId);
+  res.json({ pendingChunks });
 });
 
 /**
@@ -245,7 +473,6 @@ app.post(
           }
           parsedDeck = pptxDeck;
         } else if (ext === '.pdf' && !parsedDeck) {
-          // PDF without client preview: create provisional slide structure
           console.log(`[Server] Received PDF ${slideUploaded.originalname} (${slideUploaded.size} bytes).`);
         }
       }
@@ -331,7 +558,6 @@ async function handleGoogleLinkImport(req, res) {
       const buffer = Buffer.from(arrayBuffer);
       const parsedDeck = await parsePptxBuffer(buffer, 'Google Slides');
 
-      // Merge with existing presentation if mergeMode === 'MERGE'
       const merged = mergeScriptAndSlideDeck(
         null,
         parsedDeck,
@@ -419,19 +645,13 @@ async function handleGoogleLinkImport(req, res) {
 }
 
 /**
- * 4. POST & GET /api/fetch-google-link
- * Supports both Google Docs and Google Slides public links
+ * POST & GET /api/fetch-google-link
  */
 app.all('/api/fetch-google-link', handleGoogleLinkImport);
-
-/**
- * Backward compatibility alias for /api/fetch-google-doc
- */
 app.all('/api/fetch-google-doc', handleGoogleLinkImport);
 
 /**
  * POST /api/test-key
- * Direct endpoint to test a keypress
  */
 app.post('/api/test-key', (req, res) => {
   const { action } = req.body;
@@ -462,139 +682,7 @@ wss.on('connection', (ws, req) => {
   ws.on('message', async (rawMessage) => {
     try {
       const msg = JSON.parse(rawMessage.toString());
-      console.log(`[WebSocket Message] Type: ${msg.type}`);
-
-      switch (msg.type) {
-        case 'GOTO_SLIDE': {
-          const target = Number(msg.targetSlide);
-          if (isNaN(target)) break;
-
-          const clampedTarget = Math.max(1, Math.min(presentationData.totalSlides, target));
-          const shouldJump = presentationData.isSyncLocked || msg.force === true;
-
-          if (shouldJump) {
-            const jumpResult = await keyController.jumpToSlide(
-              presentationData.currentSlide,
-              clampedTarget,
-              currentKeyMapping
-            );
-
-            presentationData.currentSlide = clampedTarget;
-            presentationData.updatedAt = Date.now();
-
-            broadcastStateSync();
-            broadcast({
-              type: 'KEY_EXEC_RESULT',
-              success: true,
-              action: 'GOTO_SLIDE',
-              currentSlide: presentationData.currentSlide,
-              stepsSent: jumpResult.stepsSent,
-              timestamp: Date.now()
-            });
-          } else {
-            // Free preview mode without emulating hardware keys
-            presentationData.currentSlide = clampedTarget;
-            presentationData.updatedAt = Date.now();
-            broadcastStateSync();
-          }
-          break;
-        }
-
-        case 'STEP_SLIDE': {
-          const direction = msg.direction; // 'NEXT' | 'PREV' | 'BLACKOUT'
-          const keyResult = keyController.sendSingleKey(direction, currentKeyMapping);
-
-          if (direction === 'NEXT' && presentationData.currentSlide < presentationData.totalSlides) {
-            presentationData.currentSlide += 1;
-            presentationData.updatedAt = Date.now();
-          } else if (direction === 'PREV' && presentationData.currentSlide > 1) {
-            presentationData.currentSlide -= 1;
-            presentationData.updatedAt = Date.now();
-          }
-
-          broadcastStateSync();
-          broadcast({
-            type: 'KEY_EXEC_RESULT',
-            success: keyResult.success,
-            action: direction,
-            currentSlide: presentationData.currentSlide,
-            timestamp: Date.now()
-          });
-          break;
-        }
-
-        case 'ADJUST_DESYNC': {
-          const offset = Number(msg.offset);
-          const direction = offset > 0 ? 'NEXT' : 'PREV';
-          const keyResult = keyController.sendSingleKey(direction, currentKeyMapping);
-
-          console.log(`[Anti-Desync] Nudged projector by ${offset > 0 ? '+1' : '-1'} (${direction}). Slide pointer unchanged: ${presentationData.currentSlide}`);
-
-          broadcast({
-            type: 'KEY_EXEC_RESULT',
-            success: keyResult.success,
-            action: 'ADJUST_DESYNC',
-            offset,
-            currentSlide: presentationData.currentSlide,
-            timestamp: Date.now()
-          });
-          break;
-        }
-
-        case 'TOGGLE_SYNC_LOCK': {
-          presentationData.isSyncLocked = Boolean(msg.isSyncLocked);
-          presentationData.updatedAt = Date.now();
-          broadcastStateSync();
-          break;
-        }
-
-        case 'UPDATE_SCRIPT': {
-          if (msg.payload && Array.isArray(msg.payload.slides)) {
-            presentationData = {
-              ...msg.payload,
-              currentSlide: Math.max(1, Math.min(msg.payload.totalSlides || msg.payload.slides.length, msg.payload.currentSlide || 1)),
-              totalSlides: msg.payload.slides.length,
-              updatedAt: Date.now()
-            };
-            broadcastStateSync();
-          }
-          break;
-        }
-
-        case 'UPDATE_KEYMAP': {
-          if (['ARROWS', 'PAGEDOWN', 'SPACE'].includes(msg.keyMapping)) {
-            currentKeyMapping = msg.keyMapping;
-            broadcastStateSync();
-          }
-          break;
-        }
-
-        case 'START_PRESENTATION': {
-          presentationData.isSyncLocked = true;
-          presentationData.updatedAt = Date.now();
-
-          if (msg.autoMinimize) {
-            keyController.restorePresentationFocus();
-          }
-
-          broadcastStateSync();
-          break;
-        }
-
-        case 'GET_STATE': {
-          const mode = msg.connectionMode === 'BLE' ? 'BLE' : 'WIFI';
-          ws.send(JSON.stringify({
-            type: 'STATE_SYNC',
-            payload: getPayloadForTransport(presentationData, mode),
-            connectionMode: mode,
-            keyMapping: currentKeyMapping
-          }));
-          break;
-        }
-
-        default:
-          console.warn(`[WebSocket] Unrecognized message type: ${msg.type}`);
-      }
+      await handleUnifiedCommand(msg, 'WIFI');
     } catch (err) {
       console.error('[WebSocket] Error processing message:', err);
     }
@@ -626,16 +714,19 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`=======================================================`);
   console.log(`  NextS Desktop Host Server running at http://0.0.0.0:${PORT}`);
   console.log(`  WebSocket endpoint: ws://0.0.0.0:${PORT}/ws`);
+  console.log(`  BLE GATT Server: "${bleManager.getStatus().deviceName}" (State: ${bleManager.getStatus().adapterState})`);
   console.log(`=======================================================`);
 });
 
 // Process cleanup
 process.on('SIGINT', () => {
   keyController.destroy();
+  bleManager.destroy();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   keyController.destroy();
+  bleManager.destroy();
   process.exit(0);
 });

@@ -141,7 +141,23 @@ export function AppProvider({ children }) {
   const [connectionStatus, setConnectionStatus] = useState({
     connected: false,
     mode: 'DISCONNECTED',
-    latencyMs: 0
+    latencyMs: 0,
+    transportPreference: 'AUTO',
+    wifiConnected: false,
+    bleConnected: false,
+    bleDeviceName: null,
+    bleSupportInfo: {}
+  });
+
+  const [bleServerStatus, setBleServerStatus] = useState({
+    isAdvertising: true,
+    adapterState: 'Simulated',
+    serviceUuid: '0000ffe0-0000-1000-8000-00805f9b34fb',
+    commandCharUuid: '0000ffe1-0000-1000-8000-00805f9b34fb',
+    stateCharUuid: '0000ffe2-0000-1000-8000-00805f9b34fb',
+    deviceName: 'SlideSync-Host',
+    connectedDevices: [],
+    stats: { packetsReceived: 0, packetsSent: 0, lastCommandAt: null, lastCommandType: null }
   });
 
   const [networkInfo, setNetworkInfo] = useState({
@@ -296,8 +312,20 @@ export function AppProvider({ children }) {
   })();
 
   // -------------------------------------------------------------
-  // Network Info Fetching
+  // Network Info & BLE Status Fetching
   // -------------------------------------------------------------
+  const fetchBleStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/ble/status');
+      if (res.ok) {
+        const data = await res.json();
+        setBleServerStatus(data);
+      }
+    } catch (e) {
+      // Silently ignore
+    }
+  }, []);
+
   const fetchNetworkInfo = useCallback(async (preferredIp = null) => {
     try {
       const url = preferredIp
@@ -310,6 +338,9 @@ export function AppProvider({ children }) {
           ...data,
           loading: false
         });
+        if (data.bleStatus) {
+          setBleServerStatus(data.bleStatus);
+        }
       }
     } catch (err) {
       console.warn('[AppContext] Failed to fetch /api/network-info:', err.message);
@@ -319,7 +350,8 @@ export function AppProvider({ children }) {
 
   useEffect(() => {
     fetchNetworkInfo();
-  }, [fetchNetworkInfo]);
+    fetchBleStatus();
+  }, [fetchNetworkInfo, fetchBleStatus]);
 
   const selectIp = (ip) => {
     fetchNetworkInfo(ip);
@@ -380,6 +412,9 @@ export function AppProvider({ children }) {
         }
         if (data.keyMapping) {
           setSettings((prev) => ({ ...prev, keyMapping: data.keyMapping }));
+        }
+        if (data.bleStatus) {
+          setBleServerStatus(data.bleStatus);
         }
       })
       .catch((e) => {
@@ -550,6 +585,64 @@ export function AppProvider({ children }) {
     }
   };
 
+  // -------------------------------------------------------------
+  // Bluetooth BLE Dual-Transport Action Handlers
+  // -------------------------------------------------------------
+  const connectBleDevice = async (options = {}) => {
+    try {
+      showToast('Đang quét thiết bị Bluetooth BLE (SlideSync-Host)...');
+      await connectionManager.connectBle(options);
+      showToast('Đã kết nối Bluetooth BLE thành công!');
+      fetchBleStatus();
+    } catch (err) {
+      console.warn('[AppContext] connectBleDevice error:', err);
+      showToast('Không thể kết nối BLE: ' + (err.message || 'Thiết bị hủy hoặc lỗi'));
+    }
+  };
+
+  const disconnectBleDevice = () => {
+    connectionManager.disconnectBle();
+    showToast('Đã ngắt kết nối Bluetooth BLE.');
+    fetchBleStatus();
+  };
+
+  const toggleHostBleAdvertising = async (enabled) => {
+    try {
+      const res = await fetch('/api/ble/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setBleServerStatus(updated);
+        showToast(enabled ? 'Đã bật phát sóng BLE trên máy tính!' : 'Đã tạm dừng phát sóng BLE.');
+      }
+    } catch (err) {
+      showToast('Lỗi khi thay đổi phát sóng BLE: ' + err.message);
+    }
+  };
+
+  const setTransportPreference = (pref) => {
+    connectionManager.setTransportPreference(pref);
+    const labels = {
+      AUTO: 'Tự động (Wi-Fi + BLE dự phòng)',
+      WIFI: 'Ưu tiên Wi-Fi / Hotspot',
+      BLE: 'Chỉ dùng Bluetooth BLE'
+    };
+    showToast(`Chế độ mạng: ${labels[pref] || pref}`);
+  };
+
+  const simulateBleConnect = async () => {
+    try {
+      await connectionManager.connectBle({ forceTunnel: true });
+      showToast('Đã kết nối BLE (GATT Bridge) thành công!');
+      fetchBleStatus();
+    } catch (err) {
+      showToast('Lỗi kết nối BLE: ' + err.message);
+    }
+  };
+
   const value = {
     settings,
     presentationData,
@@ -562,6 +655,13 @@ export function AppProvider({ children }) {
     importStats,
     connectionStatus,
     networkInfo,
+    bleServerStatus,
+    connectBleDevice,
+    disconnectBleDevice,
+    toggleHostBleAdvertising,
+    setTransportPreference,
+    simulateBleConnect,
+    fetchBleStatus,
     timerSeconds,
     isTimerRunning,
     formattedTimer,

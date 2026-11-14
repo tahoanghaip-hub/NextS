@@ -31,10 +31,23 @@ export default function SlideSidebar({ onSelectSlide }) {
       {/* ----------------------------------------------------- */}
       {/* Header                                                 */}
       {/* ----------------------------------------------------- */}
-      <div className="py-2 px-1 border-b theme-border text-center sticky top-0 theme-bg-surface z-10">
+      <div className="py-2 px-1 border-b theme-border text-center sticky top-0 theme-bg-surface z-10 flex flex-col items-center">
         <span className="text-[10px] sm:text-xs font-bold tracking-wider uppercase theme-text-secondary block truncate">
           SLIDES ({presentationData.totalSlides || slides.length})
         </span>
+        {connectionStatus?.mode === 'BLE' && (
+          <span
+            title="Chế độ BLE: Tối ưu băng thông - Ẩn ảnh"
+            className="text-[8px] sm:text-[9px] font-bold px-1.5 py-0.5 rounded-full border mt-1 truncate max-w-full"
+            style={{
+              backgroundColor: 'rgba(59, 130, 246, 0.12)',
+              borderColor: 'var(--accent-primary)',
+              color: 'var(--accent-primary)'
+            }}
+          >
+            Chế độ BLE (Tối ưu băng thông - Ẩn ảnh)
+          </span>
+        )}
       </div>
 
       {/* ----------------------------------------------------- */}

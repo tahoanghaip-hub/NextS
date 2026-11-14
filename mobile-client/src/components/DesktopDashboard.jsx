@@ -35,7 +35,10 @@ import {
   HelpCircle,
   ExternalLink,
   Loader2,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Zap,
+  Radio,
+  Power
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import {
@@ -57,6 +60,11 @@ export default function DesktopDashboard({
     presentationData,
     connectionStatus,
     networkInfo,
+    bleServerStatus,
+    toggleHostBleAdvertising,
+    simulateBleConnect,
+    disconnectBleDevice,
+    setTransportPreference,
     timerSeconds,
     isTimerRunning,
     formattedTimer,
@@ -80,7 +88,6 @@ export default function DesktopDashboard({
 
   // Column 1 Local States
   const [copiedUrl, setCopiedUrl] = useState(false);
-  const [bleBroadcasting, setBleBroadcasting] = useState(true);
 
   // Column 2 Local States
   const [mergeMode, setMergeMode] = useState('MERGE'); // 'MERGE' | 'REPLACE'
@@ -621,20 +628,21 @@ export default function DesktopDashboard({
             )}
           </div>
 
-          {/* Card 2: Bluetooth BLE Status */}
-          <div className="theme-bg-surface border theme-border rounded-xl p-3.5 space-y-2.5">
+          {/* Card 2: Bluetooth BLE Status & Fast Link Switcher */}
+          <div className="theme-bg-surface border theme-border rounded-xl p-3.5 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-1.5">
                 <Bluetooth className="w-4 h-4 text-blue-400" />
                 <span className="text-xs font-bold theme-text-primary">
-                  Bluetooth BLE
+                  Bluetooth Low Energy (BLE)
                 </span>
               </div>
               <button
-                onClick={() => setBleBroadcasting(!bleBroadcasting)}
+                onClick={() => toggleHostBleAdvertising(!bleServerStatus?.isAdvertising)}
+                title={bleServerStatus?.isAdvertising ? 'Tắt phát sóng BLE' : 'Bật phát sóng BLE'}
                 className="w-9 h-5 rounded-full transition-colors duration-200 ease-in-out relative p-0.5 focus:outline-none"
                 style={{
-                  backgroundColor: bleBroadcasting
+                  backgroundColor: bleServerStatus?.isAdvertising
                     ? 'var(--accent-primary)'
                     : 'var(--border-subtle)'
                 }}
@@ -642,14 +650,91 @@ export default function DesktopDashboard({
                 <div
                   className="w-4 h-4 rounded-full bg-white transition-transform duration-200 ease-in-out shadow-sm"
                   style={{
-                    transform: bleBroadcasting ? 'translateX(16px)' : 'translateX(0px)'
+                    transform: bleServerStatus?.isAdvertising ? 'translateX(16px)' : 'translateX(0px)'
                   }}
                 />
               </button>
             </div>
+
             <p className="text-[11px] theme-text-secondary leading-snug">
-              Dịch vụ <code className="font-mono text-blue-400">SlideSync-Host</code> GATT: {bleBroadcasting ? 'Sẵn sàng kết nối tầm gần 2-5m (Không cần router Wi-Fi)' : 'Đã tạm tắt'}
+              Dịch vụ <code className="font-mono text-blue-400">SlideSync-Host</code> GATT:{' '}
+              {bleServerStatus?.isAdvertising
+                ? 'Sẵn sàng kết nối tầm gần 2-5m (Không cần router Wi-Fi)'
+                : 'Đã tạm tắt phát sóng'}
             </p>
+
+            {/* Diagnostic stats */}
+            <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+              <div className="p-2 rounded-lg theme-bg-elevated theme-border border">
+                <span className="theme-text-muted block">Adapter Host:</span>
+                <span
+                  className="font-bold truncate block"
+                  style={{
+                    color:
+                      bleServerStatus?.adapterState === 'PoweredOn'
+                        ? 'var(--success-color)'
+                        : 'var(--accent-primary)'
+                  }}
+                >
+                  {bleServerStatus?.adapterState || 'Simulated'}
+                </span>
+              </div>
+
+              <div className="p-2 rounded-lg theme-bg-elevated theme-border border">
+                <span className="theme-text-muted block">Thiết bị ghép nối:</span>
+                <span className="font-bold theme-text-primary block">
+                  {bleServerStatus?.connectedDevices?.length || 0} client(s)
+                </span>
+              </div>
+
+              <div className="p-2 rounded-lg theme-bg-elevated theme-border border">
+                <span className="theme-text-muted block">Gói nhận (RX):</span>
+                <span className="font-mono font-bold theme-text-primary block">
+                  {bleServerStatus?.stats?.packetsReceived || 0}
+                </span>
+              </div>
+
+              <div className="p-2 rounded-lg theme-bg-elevated theme-border border">
+                <span className="theme-text-muted block">Gói gửi (TX):</span>
+                <span className="font-mono font-bold theme-text-primary block">
+                  {bleServerStatus?.stats?.packetsSent || 0}
+                </span>
+              </div>
+            </div>
+
+            {/* 1-Click Fast BLE Link Switcher */}
+            <div className="pt-1">
+              {!connectionStatus.bleConnected ? (
+                <button
+                  onClick={() => simulateBleConnect()}
+                  className="w-full py-1.5 px-2.5 rounded-lg text-xs font-bold text-white transition hover:opacity-90 flex items-center justify-center space-x-1.5 shadow-sm"
+                  style={{ backgroundColor: 'var(--accent-primary)' }}
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>Kết nối / Giả lập BLE nhanh</span>
+                </button>
+              ) : (
+                <div className="flex items-center space-x-1.5">
+                  <div
+                    className="flex-1 py-1 px-2 rounded-lg text-[11px] font-bold text-center border truncate"
+                    style={{
+                      backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                      borderColor: 'var(--accent-primary)',
+                      color: 'var(--accent-primary)'
+                    }}
+                  >
+                    Đã nối BLE ({connectionStatus.mode})
+                  </div>
+                  <button
+                    onClick={disconnectBleDevice}
+                    title="Ngắt kết nối BLE"
+                    className="p-1.5 rounded-lg border theme-border theme-bg-elevated text-rose-400 hover:opacity-80 transition"
+                  >
+                    <Power className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Card 3: Windows Key Emulation & Anti-Desync Diagnostics */}
@@ -1059,6 +1144,22 @@ export default function DesktopDashboard({
           <div className="flex-1 overflow-y-auto p-3 space-y-3 thin-scrollbar">
             {column3Tab === 'slides' && (
               <>
+                {connectionStatus.mode === 'BLE' && (
+                  <div
+                    className="flex items-center justify-between px-3 py-1.5 rounded-xl border text-xs font-semibold"
+                    style={{
+                      backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                      borderColor: 'var(--accent-primary)',
+                      color: 'var(--accent-primary)'
+                    }}
+                  >
+                    <div className="flex items-center space-x-1.5">
+                      <Bluetooth className="w-3.5 h-3.5 animate-pulse" />
+                      <span>Chế độ BLE (Tối ưu băng thông - Ẩn ảnh)</span>
+                    </div>
+                    <span className="text-[10px] theme-text-secondary">Độ trễ &lt; 25ms</span>
+                  </div>
+                )}
                 {presentationData.slides.map((slide) => {
                   const isActive = slide.slideNumber === currentSlide;
                   const isEditing = editingSlideNumber === slide.slideNumber;
