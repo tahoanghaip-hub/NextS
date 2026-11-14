@@ -88,6 +88,55 @@ export function AppProvider({ children }) {
   // Active Pager Screen: 0 for Screen 1 (Script), 1 for Screen 2 (Q&A)
   const [activePagerScreen, setActivePagerScreen] = useState(0);
 
+  // View mode management: 'AUTO' | 'DESKTOP' | 'MOBILE' | 'MINI_PILL'
+  const [viewMode, setViewMode] = useState('AUTO');
+  const [isDesktopViewport, setIsDesktopViewport] = useState(() => {
+    return typeof window !== 'undefined' ? window.innerWidth >= 1024 : false;
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsDesktopViewport(window.innerWidth >= 1024);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const effectiveViewMode = (() => {
+    if (viewMode === 'MINI_PILL') return 'MINI_PILL';
+    if (viewMode === 'DESKTOP') return 'DESKTOP';
+    if (viewMode === 'MOBILE') return 'MOBILE';
+    return isDesktopViewport ? 'DESKTOP' : 'MOBILE';
+  })();
+
+  // Real-time import & deck statistics
+  const importStats = (() => {
+    const slides = presentationData?.slides || [];
+    const totalSlides = slides.length;
+    const slidesWithQA = slides.filter(
+      (s) => s.qaContent && s.qaContent.trim().length > 0
+    ).length;
+    const slidesWithThumbnails = slides.filter((s) => Boolean(s.thumbnailBase64)).length;
+    const hasGeneralQA = Boolean(
+      presentationData?.generalQA && presentationData.generalQA.trim().length > 0
+    );
+    const totalWords = slides.reduce((acc, slide) => {
+      if (!slide.scriptContent) return acc;
+      const words = slide.scriptContent.trim().split(/\s+/).filter(Boolean).length;
+      return acc + words;
+    }, 0);
+    const estimatedMinutes = Math.max(1, Math.ceil(totalWords / 130));
+
+    return {
+      totalSlides,
+      slidesWithQA,
+      slidesWithThumbnails,
+      hasGeneralQA,
+      totalWords,
+      estimatedMinutes
+    };
+  })();
+
   // 3. Network & Connection states
   const [connectionStatus, setConnectionStatus] = useState({
     connected: false,
@@ -444,7 +493,7 @@ export function AppProvider({ children }) {
     showToast('Đã khôi phục dữ liệu mẫu 5 slides!');
   };
 
-  const startPresentation = () => {
+  const startPresentation = (enterMiniPill = false) => {
     connectionManager.send({
       type: 'START_PRESENTATION',
       autoMinimize: settings.autoMinimizeOnStart
@@ -455,6 +504,11 @@ export function AppProvider({ children }) {
     }));
     startTimer();
     showToast('Đã bắt đầu bài thuyết trình & lấy nét cửa sổ trình chiếu!');
+
+    // If called from Desktop view or enterMiniPill is requested, collapse into Mini Floating Pill
+    if (enterMiniPill || viewMode === 'DESKTOP' || (viewMode === 'AUTO' && isDesktopViewport)) {
+      setViewMode('MINI_PILL');
+    }
   };
 
   /**
@@ -501,6 +555,11 @@ export function AppProvider({ children }) {
     presentationData,
     activePagerScreen,
     setActivePagerScreen,
+    viewMode,
+    setViewMode,
+    isDesktopViewport,
+    effectiveViewMode,
+    importStats,
     connectionStatus,
     networkInfo,
     timerSeconds,

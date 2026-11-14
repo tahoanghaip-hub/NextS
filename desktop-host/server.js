@@ -117,6 +117,54 @@ app.get('/api/state', (req, res) => {
 });
 
 /**
+ * GET or POST /api/fetch-google-doc
+ * Fetches exported plain text from a public Google Doc URL or docId without OAuth2
+ */
+app.all('/api/fetch-google-doc', async (req, res) => {
+  try {
+    const docUrl = req.query.url || req.body?.url;
+    const docId = req.query.docId || req.body?.docId;
+    let targetId = docId;
+
+    if (!targetId && docUrl) {
+      const match = docUrl.match(/[-\w]{25,}/);
+      if (match) targetId = match[0];
+    }
+
+    if (!targetId) {
+      return res.status(400).json({ error: 'Không tìm thấy Document ID hợp lệ trong liên kết Google Docs.' });
+    }
+
+    const exportUrl = `https://docs.google.com/document/d/${targetId}/export?format=txt`;
+    const response = await fetch(exportUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) NextS/1.0'
+      }
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: `Không thể tải Google Doc (Mã lỗi ${response.status}). Vui lòng đảm bảo tài liệu được bật chia sẻ công khai ("Bất kỳ ai có đường liên kết đều có thể xem").`
+      });
+    }
+
+    const rawText = await response.text();
+    res.json({ success: true, docId: targetId, rawText });
+  } catch (err) {
+    console.error('[Server] Error fetching Google Doc:', err);
+    res.status(500).json({ error: 'Lỗi khi tải Google Doc: ' + err.message });
+  }
+});
+
+/**
+ * POST /api/parse-files
+ * File intake endpoint prepared for Milestone 4 binary parsing
+ */
+app.post('/api/parse-files', (req, res) => {
+  res.json({ success: true, message: 'Đã nhận file. Trình bóc tách nhị phân chuyên sâu được tối ưu cho Milestone 4.' });
+});
+
+/**
  * POST /api/test-key
  * Direct endpoint to test a keypress
  */

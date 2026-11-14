@@ -10,7 +10,8 @@ import {
   Pause,
   RotateCcw,
   Edit3,
-  Settings
+  Settings,
+  Monitor
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -29,7 +30,8 @@ export default function TopBar({
     pauseTimer,
     resetTimer,
     toggleSyncLock,
-    startPresentation
+    startPresentation,
+    setViewMode
   } = useApp();
 
   const isConnected = connectionStatus.connected;
@@ -190,9 +192,17 @@ export default function TopBar({
       </div>
 
       {/* ----------------------------------------------------- */}
-      {/* Far Right: Settings Button                             */}
+      {/* Far Right: PC View Switcher & Settings Buttons        */}
       {/* ----------------------------------------------------- */}
-      <div className="flex items-center pl-1">
+      <div className="flex items-center space-x-1 pl-1">
+        <button
+          onClick={() => setViewMode('DESKTOP')}
+          title="Chuyển sang Giao diện Bàn làm việc PC (PC Dashboard)"
+          className="p-1.5 rounded-lg theme-border border theme-bg-elevated theme-text-primary hover:opacity-80 transition"
+        >
+          <Monitor className="w-4 h-4 text-blue-400" />
+        </button>
+
         <button
           onClick={onOpenSettingsModal}
           title="Cài đặt máy nhắc chữ & Prompt AI"

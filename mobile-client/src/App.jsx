@@ -4,12 +4,15 @@ import { useApp } from './context/AppContext';
 import TopBar from './components/TopBar';
 import SlideSidebar from './components/SlideSidebar';
 import ScriptSwipePager from './components/ScriptSwipePager';
+import DesktopDashboard from './components/DesktopDashboard';
+import MiniFloatingPill from './components/MiniFloatingPill';
 import SettingsModal from './components/SettingsModal';
 import QuickEditModal from './components/QuickEditModal';
 import ConnectionModal from './components/ConnectionModal';
+import ImportModal from './components/ImportModal';
 
 export default function App() {
-  const { toastMessage, goToSlide } = useApp();
+  const { toastMessage, goToSlide, effectiveViewMode } = useApp();
 
   // Modal open states
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -17,6 +20,10 @@ export default function App() {
   const [isQuickEditOpen, setIsQuickEditOpen] = useState(false);
   const [quickEditTab, setQuickEditTab] = useState('structured');
   const [quickEditSlideNum, setQuickEditSlideNum] = useState(null);
+
+  // Import Modal state
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [importInitialTab, setImportInitialTab] = useState('file');
 
   // Ref to ScriptSwipePager to trigger programmatic scroll on slide selection
   const pagerRef = useRef(null);
@@ -34,10 +41,15 @@ export default function App() {
     setIsQuickEditOpen(true);
   };
 
+  const handleOpenImport = (tab = 'file') => {
+    setImportInitialTab(tab);
+    setIsImportOpen(true);
+  };
+
   return (
     <div className="h-[100dvh] w-full flex flex-col overflow-hidden theme-bg-app theme-text-primary antialiased select-none">
       {/* --------------------------------------------------------- */}
-      {/* Toast Notification Banner                                */}
+      {/* Toast Notification Banner (Always visible across all modes)*/}
       {/* --------------------------------------------------------- */}
       {toastMessage && (
         <div className="fixed top-3 left-1/2 -translate-x-1/2 z-50 transition-all duration-300 ease-out max-w-sm w-auto px-4 pointer-events-none">
@@ -52,31 +64,43 @@ export default function App() {
       )}
 
       {/* --------------------------------------------------------- */}
-      {/* Top Navigation Bar (52px)                                 */}
+      {/* Dynamic View Routing: MINI_PILL | DESKTOP | MOBILE        */}
       {/* --------------------------------------------------------- */}
-      <TopBar
-        onOpenConnectionModal={() => setIsConnectionOpen(true)}
-        onOpenQuickEditModal={(tab) => handleOpenQuickEdit(tab || 'structured')}
-        onOpenImportModal={() => handleOpenQuickEdit('import')}
-        onOpenSettingsModal={() => setIsSettingsOpen(true)}
-      />
+      {effectiveViewMode === 'MINI_PILL' && (
+        <MiniFloatingPill onOpenSettingsModal={() => setIsSettingsOpen(true)} />
+      )}
 
-      {/* --------------------------------------------------------- */}
-      {/* Main Workspace (1/5 Left Sidebar + 4/5 Dual-Screen Pager)  */}
-      {/* --------------------------------------------------------- */}
-      <div className="h-[calc(100dvh-52px)] w-full flex overflow-hidden theme-bg-app relative">
-        {/* Left Column (1/5): Slide Quick-Jump Rail */}
-        <SlideSidebar onSelectSlide={handleSelectSlide} />
-
-        {/* Right Column (4/5): Horizontal Swipe Pager (Script <-> Q&A) */}
-        <ScriptSwipePager
-          ref={pagerRef}
+      {effectiveViewMode === 'DESKTOP' && (
+        <DesktopDashboard
+          onOpenSettingsModal={() => setIsSettingsOpen(true)}
+          onOpenImportModal={() => handleOpenImport('file')}
           onOpenQuickEditModal={handleOpenQuickEdit}
         />
-      </div>
+      )}
+
+      {effectiveViewMode === 'MOBILE' && (
+        <>
+          {/* Top Navigation Bar (52px) */}
+          <TopBar
+            onOpenConnectionModal={() => setIsConnectionOpen(true)}
+            onOpenQuickEditModal={(tab) => handleOpenQuickEdit(tab || 'structured')}
+            onOpenImportModal={() => handleOpenImport('file')}
+            onOpenSettingsModal={() => setIsSettingsOpen(true)}
+          />
+
+          {/* Main Mobile Teleprompter Workspace (1/5 Sidebar + 4/5 Pager) */}
+          <div className="h-[calc(100dvh-52px)] w-full flex overflow-hidden theme-bg-app relative">
+            <SlideSidebar onSelectSlide={handleSelectSlide} />
+            <ScriptSwipePager
+              ref={pagerRef}
+              onOpenQuickEditModal={handleOpenQuickEdit}
+            />
+          </div>
+        </>
+      )}
 
       {/* --------------------------------------------------------- */}
-      {/* Modals & Dialogs                                         */}
+      {/* Unified Modals & Dialogs (Mounted at root for all views)  */}
       {/* --------------------------------------------------------- */}
       <SettingsModal
         isOpen={isSettingsOpen}
@@ -93,6 +117,12 @@ export default function App() {
       <ConnectionModal
         isOpen={isConnectionOpen}
         onClose={() => setIsConnectionOpen(false)}
+      />
+
+      <ImportModal
+        isOpen={isImportOpen}
+        onClose={() => setIsImportOpen(false)}
+        initialTab={importInitialTab}
       />
     </div>
   );
