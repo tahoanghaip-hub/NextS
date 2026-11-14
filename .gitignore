@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+desktop-host/node_modules/
+mobile-client/node_modules/
+
+# Build outputs
+dist/
+mobile-client/dist/
+build/
+*.exe
+*.apk
+
+# Logs & OS files
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.env
+.env.local
