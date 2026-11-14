@@ -33,13 +33,19 @@ import {
   Unlock,
   MessageSquare,
   HelpCircle,
-  ExternalLink
+  ExternalLink,
+  Loader2,
+  Image as ImageIcon
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import {
   parseConventionTextToPresentationData,
   extractGoogleDocId
 } from '../utils/parser';
+import {
+  uploadAndProcessFiles,
+  generateSlideCardWebp
+} from '../utils/fileProcessors';
 
 export default function DesktopDashboard({
   onOpenSettingsModal,
@@ -77,6 +83,8 @@ export default function DesktopDashboard({
   const [bleBroadcasting, setBleBroadcasting] = useState(true);
 
   // Column 2 Local States
+  const [mergeMode, setMergeMode] = useState('MERGE'); // 'MERGE' | 'REPLACE'
+  const [parseProgress, setParseProgress] = useState({ active: false, percent: 0, message: '' });
   const [gdocUrl, setGdocUrl] = useState('');
   const [gdocLoading, setGdocLoading] = useState(false);
   const [scriptFileBadge, setScriptFileBadge] = useState(null);
@@ -139,37 +147,67 @@ export default function DesktopDashboard({
   const processScriptFile = async (file) => {
     if (!file) return;
     setScriptFileBadge({ name: file.name, size: file.size });
+    setParseProgress({ active: true, percent: 15, message: `Đang bóc tách kịch bản ${file.name}...` });
 
-    const fileName = file.name.toLowerCase();
-    if (fileName.endsWith('.txt') || fileName.endsWith('.md')) {
-      try {
-        const text = await file.text();
-        const baseTitle = file.name.replace(/\.[^/.]+$/, '');
-        const parsed = parseConventionTextToPresentationData(text, baseTitle);
-        updateScriptData(parsed);
-        showToast(`Đã nạp thành công ${parsed.totalSlides} slides từ ${file.name}!`);
-      } catch (err) {
-        showToast(`Lỗi đọc file kịch bản: ${err.message}`);
+    try {
+      const res = await uploadAndProcessFiles({
+        scriptFile: file,
+        mergeMode,
+        connectionMode: connectionStatus.mode,
+        onProgress: (p) => {
+          setParseProgress({
+            active: true,
+            percent: p.percent || 50,
+            message: p.message || 'Đang xử lý kịch bản...'
+          });
+        }
+      });
+
+      if (res.presentationData) {
+        updateScriptData(res.presentationData);
+        showToast(`Đã nạp ${res.presentationData.totalSlides} slides từ ${file.name}!`);
       }
-    } else if (fileName.endsWith('.docx')) {
-      showToast(`Đã nhận file Word: ${file.name}. Sẵn sàng bóc tách kịch bản.`);
-      // Prepare form data for server
-      const formData = new FormData();
-      formData.append('file', file);
-      try {
-        await fetch('/api/parse-files', { method: 'POST', body: formData });
-      } catch (e) {
-        // Fallback
-      }
-    } else {
-      showToast('Định dạng kịch bản không hợp lệ (.docx, .txt, .md).');
+    } catch (err) {
+      console.error('[Dashboard] Error processing script file:', err);
+      showToast(`Lỗi đọc file kịch bản: ${err.message}`);
+    } finally {
+      setTimeout(() => {
+        setParseProgress({ active: false, percent: 0, message: '' });
+      }, 700);
     }
   };
 
-  const processDeckFile = (file) => {
+  const processDeckFile = async (file) => {
     if (!file) return;
     setDeckFileBadge({ name: file.name, size: file.size });
-    showToast(`Đã nhận file trình chiếu ${file.name} (Milestone 4 Extractor ready)`);
+    setParseProgress({ active: true, percent: 10, message: `Đang nạp file trình chiếu ${file.name}...` });
+
+    try {
+      const res = await uploadAndProcessFiles({
+        slideFile: file,
+        mergeMode,
+        connectionMode: connectionStatus.mode,
+        onProgress: (p) => {
+          setParseProgress({
+            active: true,
+            percent: p.percent || 60,
+            message: p.message || 'Đang bóc tách slide...'
+          });
+        }
+      });
+
+      if (res.presentationData) {
+        updateScriptData(res.presentationData);
+        showToast(`Đã đồng bộ ${res.presentationData.totalSlides} slides từ ${file.name}!`);
+      }
+    } catch (err) {
+      console.error('[Dashboard] Error processing deck file:', err);
+      showToast(`Lỗi bóc tách trình chiếu: ${err.message}`);
+    } finally {
+      setTimeout(() => {
+        setParseProgress({ active: false, percent: 0, message: '' });
+      }, 700);
+    }
   };
 
   const handleScriptDrop = (e) => {
@@ -188,46 +226,42 @@ export default function DesktopDashboard({
 
   const handleFetchGDoc = async () => {
     if (!gdocUrl.trim()) {
-      showToast('Vui lòng nhập link Google Docs.');
-      return;
-    }
-    const docId = extractGoogleDocId(gdocUrl);
-    if (!docId) {
-      showToast('Đường link không chứa Google Doc ID hợp lệ.');
+      showToast('Vui lòng nhập link Google Docs hoặc Google Slides.');
       return;
     }
 
     setGdocLoading(true);
+    setParseProgress({ active: true, percent: 25, message: 'Đang tải và bóc tách từ Google Link...' });
+
     try {
-      let rawText = '';
-      try {
-        const res = await fetch(`/api/fetch-google-doc?url=${encodeURIComponent(gdocUrl)}`);
-        if (res.ok) {
-          const data = await res.json();
-          rawText = data.rawText;
-        } else {
-          const errorData = await res.json().catch(() => ({}));
-          throw new Error(errorData.error || `Lỗi tải: ${res.status}`);
-        }
-      } catch (proxyErr) {
-        const exportUrl = `https://docs.google.com/document/d/${docId}/export?format=txt`;
-        const directRes = await fetch(exportUrl);
-        if (!directRes.ok) throw new Error('Không thể tải Google Docs trực tiếp.');
-        rawText = await directRes.text();
+      const res = await fetch('/api/fetch-google-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: gdocUrl.trim(), mergeMode })
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `Lỗi tải: ${res.status}`);
       }
 
-      if (rawText && rawText.trim()) {
-        const parsed = parseConventionTextToPresentationData(rawText, 'Google Docs Kịch bản');
-        updateScriptData(parsed);
-        showToast(`Đã nạp ${parsed.totalSlides} slides từ Google Docs!`);
+      const data = await res.json();
+      if (data.presentationData) {
+        updateScriptData(data.presentationData);
+        const typeLabel = data.type === 'GOOGLE_SLIDES' ? 'Google Slides' : 'Google Docs';
+        showToast(`Đã nạp ${data.presentationData.totalSlides} slides từ ${typeLabel}!`);
         setGdocUrl('');
       } else {
-        showToast('Tài liệu Google Docs trống.');
+        showToast('Tài liệu Google không có nội dung.');
       }
     } catch (err) {
-      showToast(err.message || 'Lỗi nạp Google Docs');
+      console.error('[Dashboard] Error fetching Google link:', err);
+      showToast(err.message || 'Lỗi nạp Google Docs/Slides');
     } finally {
       setGdocLoading(false);
+      setTimeout(() => {
+        setParseProgress({ active: false, percent: 0, message: '' });
+      }, 700);
     }
   };
 
@@ -718,6 +752,75 @@ export default function DesktopDashboard({
         {/* COLUMN 2: KHU VỰC NẠP FILE & THỐNG KÊ (col-4)         */}
         {/* ----------------------------------------------------- */}
         <section className="col-span-12 lg:col-span-4 flex flex-col gap-3 overflow-y-auto thin-scrollbar">
+          {/* Merge Mode Toggle */}
+          <div className="theme-bg-surface border theme-border rounded-xl p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider theme-text-primary flex items-center space-x-1.5">
+                <Sliders className="w-3.5 h-3.5 text-blue-400" />
+                <span>Chế Độ Nạp & Đồng Bộ</span>
+              </span>
+              <span className="text-[10px] theme-text-muted">Milestone 4</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5 p-1 rounded-lg theme-bg-elevated theme-border border text-xs">
+              <button
+                onClick={() => setMergeMode('MERGE')}
+                title="Gộp thông minh: Kịch bản Word ghép với Slide PDF/PowerPoint, không xóa mất nội dung đang có"
+                className="py-1.5 px-2 rounded-md font-semibold transition flex items-center justify-center space-x-1 text-center"
+                style={{
+                  backgroundColor: mergeMode === 'MERGE' ? 'var(--accent-primary)' : 'transparent',
+                  color: mergeMode === 'MERGE' ? '#ffffff' : 'var(--text-secondary)'
+                }}
+              >
+                <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Gộp thông minh</span>
+              </button>
+
+              <button
+                onClick={() => setMergeMode('REPLACE')}
+                title="Tạo bài mới: Thay thế toàn bộ bài thuyết trình bằng tài liệu mới tải lên"
+                className="py-1.5 px-2 rounded-md font-semibold transition flex items-center justify-center space-x-1 text-center"
+                style={{
+                  backgroundColor: mergeMode === 'REPLACE' ? 'var(--accent-primary)' : 'transparent',
+                  color: mergeMode === 'REPLACE' ? '#ffffff' : 'var(--text-secondary)'
+                }}
+              >
+                <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Tạo bài mới</span>
+              </button>
+            </div>
+
+            <p className="text-[11px] theme-text-muted leading-tight">
+              {mergeMode === 'MERGE'
+                ? '⚡ Gộp thông minh: Nạp Word cập nhật kịch bản; nạp PDF/PPTX cập nhật tiêu đề 3–5 từ và WebP thumbnail.'
+                : '🔄 Tạo bài mới: Thay thế hoàn toàn bài thuyết trình hiện tại.'}
+            </p>
+          </div>
+
+          {/* Real-Time Processing Progress Bar */}
+          {parseProgress.active && (
+            <div className="theme-bg-surface border theme-border rounded-xl p-3.5 space-y-2.5 animate-fadeIn">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold theme-text-primary flex items-center space-x-2 truncate">
+                  <Loader2 className="w-4 h-4 animate-spin text-blue-400 shrink-0" />
+                  <span className="truncate">{parseProgress.message}</span>
+                </span>
+                <span className="font-mono font-bold text-blue-400 shrink-0 ml-2">
+                  {parseProgress.percent}%
+                </span>
+              </div>
+              <div className="w-full h-2 rounded-full theme-bg-elevated overflow-hidden border theme-border">
+                <div
+                  className="h-full rounded-full transition-all duration-300"
+                  style={{
+                    width: `${parseProgress.percent}%`,
+                    backgroundColor: 'var(--accent-primary)'
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
           {/* Dropzone 1: Script File (.docx, .txt, .md) */}
           <div
             onDragOver={(e) => {
@@ -1041,6 +1144,21 @@ export default function DesktopDashboard({
                       {/* Normal View vs Inline Editor */}
                       {!isEditing ? (
                         <div className="space-y-1.5">
+                          {/* Low-Res WebP Thumbnail Card */}
+                          {slide.thumbnailBase64 && connectionStatus.mode !== 'BLE' && (
+                            <div className="relative mb-2 group overflow-hidden rounded-lg border theme-border">
+                              <img
+                                src={slide.thumbnailBase64}
+                                alt={`Thumbnail Slide ${slide.slideNumber}`}
+                                className="w-full max-h-48 aspect-video object-cover rounded-lg group-hover:scale-102 transition-transform duration-300"
+                              />
+                              <div className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-black/70 text-white backdrop-blur-xs flex items-center space-x-1">
+                                <ImageIcon className="w-2.5 h-2.5 text-blue-400" />
+                                <span>WebP</span>
+                              </div>
+                            </div>
+                          )}
+
                           {/* Slide Title */}
                           <h4 className="text-xs font-bold theme-text-primary">
                             {slide.title || `Slide ${slide.slideNumber}`}

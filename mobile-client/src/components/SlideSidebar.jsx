@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 
 export default function SlideSidebar({ onSelectSlide }) {
-  const { presentationData, goToSlide } = useApp();
+  const { presentationData, goToSlide, connectionStatus } = useApp();
   const activeCardRef = useRef(null);
 
   // Auto-scroll active card into view within the sidebar rail
@@ -89,7 +89,7 @@ export default function SlideSidebar({ onSelectSlide }) {
               </div>
 
               {/* Optional Thumbnail Image */}
-              {slide.thumbnailBase64 && (
+              {slide.thumbnailBase64 && connectionStatus?.mode !== 'BLE' && (
                 <img
                   src={slide.thumbnailBase64}
                   alt={`Thumbnail Slide ${slide.slideNumber}`}

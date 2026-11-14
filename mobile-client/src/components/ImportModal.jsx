@@ -15,30 +15,38 @@ import {
   ArrowRight,
   UploadCloud,
   FileCheck,
-  RotateCcw
+  RotateCcw,
+  Sliders,
+  Loader2
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import {
   parseConventionTextToPresentationData,
   extractGoogleDocId
 } from '../utils/parser';
+import {
+  uploadAndProcessFiles
+} from '../utils/fileProcessors';
 
 export default function ImportModal({ isOpen, onClose, initialTab = 'file' }) {
   const {
     presentationData,
     updateScriptData,
     copyAiPromptConvention,
-    showToast
+    showToast,
+    connectionStatus
   } = useApp();
 
   const [activeTab, setActiveTab] = useState(initialTab);
 
   // --- Tab 1: File Upload states ---
+  const [mergeMode, setMergeMode] = useState('MERGE'); // 'MERGE' | 'REPLACE'
   const [selectedScriptFile, setSelectedScriptFile] = useState(null);
   const [selectedDeckFile, setSelectedDeckFile] = useState(null);
   const [parsedPreviewData, setParsedPreviewData] = useState(null);
   const [fileLoading, setFileLoading] = useState(false);
   const [fileError, setFileError] = useState(null);
+  const [parseProgress, setParseProgress] = useState({ active: false, percent: 0, message: '' });
 
   const scriptInputRef = useRef(null);
   const deckInputRef = useRef(null);
@@ -59,69 +67,13 @@ export default function ImportModal({ isOpen, onClose, initialTab = 'file' }) {
   // -------------------------------------------------------------
   // Tab 1 Handlers: File Processing
   // -------------------------------------------------------------
-  const handleScriptFileChange = async (e) => {
+  const handleScriptFileChange = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setSelectedScriptFile(file);
     setFileError(null);
-    setFileLoading(true);
-
-    try {
-      const fileName = file.name.toLowerCase();
-      if (fileName.endsWith('.txt') || fileName.endsWith('.md')) {
-        const text = await file.text();
-        const baseTitle = file.name.replace(/\.[^/.]+$/, '');
-        const parsed = parseConventionTextToPresentationData(text, baseTitle);
-        setParsedPreviewData(parsed);
-        showToast(`Đã nhận diện ${parsed.totalSlides} slides từ file ${file.name}!`);
-      } else if (fileName.endsWith('.docx')) {
-        // DOCX handler: sends to server or parses metadata
-        const formData = new FormData();
-        formData.append('file', file);
-
-        try {
-          const res = await fetch('/api/parse-files', {
-            method: 'POST',
-            body: formData
-          });
-          if (res.ok) {
-            // Milestone 4 binary parsing stub/response
-          }
-        } catch (serverErr) {
-          // Silent fallback
-        }
-
-        // Generate clean provisional presentation structure for .docx
-        const baseTitle = file.name.replace(/\.[^/.]+$/, '');
-        setParsedPreviewData({
-          id: `pres-${Date.now()}`,
-          title: baseTitle,
-          totalSlides: 1,
-          currentSlide: 1,
-          isSyncLocked: true,
-          updatedAt: Date.now(),
-          slides: [
-            {
-              slideNumber: 1,
-              title: baseTitle,
-              scriptContent: `Đã nạp file tài liệu: ${file.name} (${(file.size / 1024).toFixed(1)} KB). Nội dung kịch bản văn bản Word sẵn sàng kết nối cùng bộ bóc tách nhị phân.`,
-              qaContent: '',
-              thumbnailBase64: null
-            }
-          ],
-          generalQA: ''
-        });
-        showToast(`Đã nạp file Word ${file.name}`);
-      } else {
-        throw new Error('Định dạng kịch bản không hỗ trợ. Vui lòng chọn .docx, .txt hoặc .md');
-      }
-    } catch (err) {
-      setFileError(err.message || 'Lỗi khi đọc file kịch bản.');
-      setParsedPreviewData(null);
-    } finally {
-      setFileLoading(false);
-    }
+    showToast(`Đã chọn file kịch bản: ${file.name}`);
   };
 
   const handleDeckFileChange = (e) => {
@@ -129,7 +81,53 @@ export default function ImportModal({ isOpen, onClose, initialTab = 'file' }) {
     if (!file) return;
 
     setSelectedDeckFile(file);
-    showToast(`Đã nhận file trình chiếu: ${file.name}`);
+    setFileError(null);
+    showToast(`Đã chọn file trình chiếu: ${file.name}`);
+  };
+
+  const handleProcessAndSyncFiles = async () => {
+    if (!selectedScriptFile && !selectedDeckFile) {
+      setFileError('Vui lòng chọn ít nhất một file kịch bản (.docx, .txt) hoặc file trình chiếu (.pdf, .pptx).');
+      return;
+    }
+
+    setFileLoading(true);
+    setFileError(null);
+    setParseProgress({
+      active: true,
+      percent: 10,
+      message: 'Đang chuẩn bị bóc tách & nén WebP...'
+    });
+
+    try {
+      const res = await uploadAndProcessFiles({
+        scriptFile: selectedScriptFile,
+        slideFile: selectedDeckFile,
+        mergeMode,
+        connectionMode: connectionStatus?.mode || 'WIFI',
+        onProgress: (p) => {
+          setParseProgress({
+            active: true,
+            percent: p.percent || 50,
+            message: p.message || 'Đang xử lý tài liệu...'
+          });
+        }
+      });
+
+      if (res.presentationData) {
+        setParsedPreviewData(res.presentationData);
+        updateScriptData(res.presentationData);
+        showToast(`Đã bóc tách & đồng bộ ${res.presentationData.totalSlides} slides thành công!`);
+      }
+    } catch (err) {
+      console.error('[ImportModal] Error processing files:', err);
+      setFileError(err.message || 'Lỗi bóc tách tài liệu.');
+    } finally {
+      setFileLoading(false);
+      setTimeout(() => {
+        setParseProgress({ active: false, percent: 0, message: '' });
+      }, 700);
+    }
   };
 
   const handleApplyParsedData = () => {
@@ -140,7 +138,7 @@ export default function ImportModal({ isOpen, onClose, initialTab = 'file' }) {
   };
 
   // -------------------------------------------------------------
-  // Tab 2 Handlers: Google Docs Public URL Import
+  // Tab 2 Handlers: Google Docs / Slides Public URL Import
   // -------------------------------------------------------------
   const handleFetchGoogleDoc = async () => {
     if (!gdocUrl.trim()) {
@@ -148,47 +146,32 @@ export default function ImportModal({ isOpen, onClose, initialTab = 'file' }) {
       return;
     }
 
-    const docId = extractGoogleDocId(gdocUrl);
-    if (!docId) {
-      setGdocError('Không tìm thấy Document ID hợp lệ trong liên kết. Vui lòng kiểm tra lại link Google Docs.');
-      return;
-    }
-
     setGdocLoading(true);
     setGdocError(null);
 
     try {
-      // 1. First attempt: call local server proxy endpoint
-      let rawText = '';
-      try {
-        const res = await fetch(`/api/fetch-google-doc?url=${encodeURIComponent(gdocUrl)}`);
-        if (res.ok) {
-          const data = await res.json();
-          rawText = data.rawText;
-        } else {
-          const errorData = await res.json().catch(() => ({}));
-          throw new Error(errorData.error || `Mã lỗi tải: ${res.status}`);
-        }
-      } catch (proxyErr) {
-        // 2. Direct client-side fetch fallback (if server is unreachable or CORS permits)
-        const exportUrl = `https://docs.google.com/document/d/${docId}/export?format=txt`;
-        const directRes = await fetch(exportUrl);
-        if (!directRes.ok) {
-          throw new Error('Không thể tải Google Docs trực tiếp. Đảm bảo tài liệu được bật chia sẻ công khai.');
-        }
-        rawText = await directRes.text();
+      const res = await fetch('/api/fetch-google-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: gdocUrl.trim(), mergeMode })
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `Mã lỗi tải: ${res.status}`);
       }
 
-      if (!rawText || !rawText.trim()) {
-        throw new Error('Nội dung tài liệu Google Docs trống.');
+      const data = await res.json();
+      if (data.presentationData) {
+        updateScriptData(data.presentationData);
+        const typeLabel = data.type === 'GOOGLE_SLIDES' ? 'Google Slides' : 'Google Docs';
+        showToast(`Đã nạp thành công ${data.presentationData.totalSlides} slides từ ${typeLabel}!`);
+        onClose();
+      } else {
+        throw new Error('Không nhận được dữ liệu từ link Google.');
       }
-
-      const parsed = parseConventionTextToPresentationData(rawText, 'Google Docs Kịch bản');
-      updateScriptData(parsed);
-      showToast(`Đã nạp thành công ${parsed.totalSlides} slides từ Google Docs!`);
-      onClose();
     } catch (err) {
-      setGdocError(err.message || 'Lỗi khi tải hoặc bóc tách dữ liệu từ Google Docs.');
+      setGdocError(err.message || 'Lỗi khi tải hoặc bóc tách dữ liệu từ Google Docs/Slides.');
     } finally {
       setGdocLoading(false);
     }
@@ -303,6 +286,50 @@ export default function ImportModal({ isOpen, onClose, initialTab = 'file' }) {
         {/* ===================================================== */}
         {activeTab === 'file' && (
           <div className="space-y-4 flex-1">
+            {/* Merge Mode Toggle */}
+            <div className="p-3 rounded-xl theme-bg-elevated theme-border border space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider theme-text-primary flex items-center space-x-1.5">
+                  <Sliders className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Chế độ nạp & đồng bộ:</span>
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setMergeMode('MERGE')}
+                  className="py-1.5 px-2 rounded-lg font-semibold transition flex items-center justify-center space-x-1.5 text-center"
+                  style={{
+                    backgroundColor: mergeMode === 'MERGE' ? 'var(--accent-primary)' : 'var(--bg-surface)',
+                    color: mergeMode === 'MERGE' ? '#ffffff' : 'var(--text-secondary)'
+                  }}
+                >
+                  <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Gộp thông minh</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setMergeMode('REPLACE')}
+                  className="py-1.5 px-2 rounded-lg font-semibold transition flex items-center justify-center space-x-1.5 text-center"
+                  style={{
+                    backgroundColor: mergeMode === 'REPLACE' ? 'var(--accent-primary)' : 'var(--bg-surface)',
+                    color: mergeMode === 'REPLACE' ? '#ffffff' : 'var(--text-secondary)'
+                  }}
+                >
+                  <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Tạo bài mới</span>
+                </button>
+              </div>
+
+              <p className="text-[11px] theme-text-muted leading-tight">
+                {mergeMode === 'MERGE'
+                  ? '⚡ Gộp thông minh: Kết hợp kịch bản Word và slide PowerPoint/PDF, không mất nội dung đã nhập.'
+                  : '🔄 Tạo bài mới: Thay thế toàn bộ kịch bản và slide hiện tại.'}
+              </p>
+            </div>
+
             {/* Android Google Drive Note Box */}
             <div className="p-3 rounded-xl border border-blue-500/30 bg-blue-500/10 flex items-start space-x-2.5 text-xs">
               <HelpCircle className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
@@ -311,6 +338,30 @@ export default function ImportModal({ isOpen, onClose, initialTab = 'file' }) {
                 Trên điện thoại Android, bấm chọn file sẽ mở trình quản lý tệp hệ thống (có tích hợp sẵn mục <strong>Google Drive</strong> ở menu ngăn kéo bên trái).
               </div>
             </div>
+
+            {/* Real-time Progress Bar */}
+            {parseProgress.active && (
+              <div className="p-3.5 rounded-xl theme-bg-elevated theme-border border space-y-2 animate-fadeIn">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold theme-text-primary flex items-center space-x-2 truncate">
+                    <Loader2 className="w-4 h-4 animate-spin text-blue-400 shrink-0" />
+                    <span className="truncate">{parseProgress.message}</span>
+                  </span>
+                  <span className="font-mono font-bold text-blue-400 shrink-0 ml-2">
+                    {parseProgress.percent}%
+                  </span>
+                </div>
+                <div className="w-full h-2 rounded-full theme-bg-surface overflow-hidden border theme-border">
+                  <div
+                    className="h-full rounded-full transition-all duration-300"
+                    style={{
+                      width: `${parseProgress.percent}%`,
+                      backgroundColor: 'var(--accent-primary)'
+                    }}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* Sub-zone 1: Script File Intake (.docx, .txt, .md) */}
             <div className="p-4 rounded-xl theme-bg-elevated theme-border border space-y-3">
@@ -398,6 +449,29 @@ export default function ImportModal({ isOpen, onClose, initialTab = 'file' }) {
               </div>
             </div>
 
+            {/* Primary Action Button */}
+            {(selectedScriptFile || selectedDeckFile) && !parsedPreviewData && (
+              <button
+                type="button"
+                onClick={handleProcessAndSyncFiles}
+                disabled={fileLoading}
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-white transition hover:opacity-90 flex items-center justify-center space-x-2 shadow-sm disabled:opacity-50"
+                style={{ backgroundColor: 'var(--accent-primary)' }}
+              >
+                {fileLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Đang bóc tách & căn chỉnh...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span>Bóc tách & Đồng bộ ngay ({mergeMode === 'MERGE' ? 'Gộp thông minh' : 'Tạo mới'})</span>
+                  </>
+                )}
+              </button>
+            )}
+
             {/* File Parsing Error */}
             {fileError && (
               <div className="p-3 rounded-xl border border-rose-500/40 bg-rose-500/10 text-rose-400 text-xs font-medium flex items-center space-x-2">
@@ -436,11 +510,45 @@ export default function ImportModal({ isOpen, onClose, initialTab = 'file' }) {
             <div className="p-3.5 rounded-xl theme-bg-elevated theme-border border text-xs theme-text-secondary leading-relaxed space-y-1.5">
               <p className="font-semibold theme-text-primary flex items-center space-x-1.5">
                 <Globe className="w-4 h-4 text-blue-400" />
-                <span>Nạp trực tiếp từ Google Docs không cần đăng nhập OAuth2:</span>
+                <span>Nạp trực tiếp từ Google Docs hoặc Google Slides công khai:</span>
               </p>
               <p>
-                Mở tài liệu Google Docs kịch bản của bạn, bấm <strong>Chia sẻ (Share)</strong> → Chọn <strong>"Bất kỳ ai có đường liên kết đều có thể xem"</strong> → Dán đường liên kết vào ô bên dưới.
+                Mở Google Docs (kịch bản) hoặc Google Slides (bài trình chiếu), bấm <strong>Chia sẻ (Share)</strong> → Chọn <strong>"Bất kỳ ai có đường liên kết đều có thể xem"</strong> → Dán đường liên kết vào ô bên dưới.
               </p>
+            </div>
+
+            {/* Merge Mode Toggle for Google Link */}
+            <div className="p-3 rounded-xl theme-bg-elevated theme-border border space-y-2">
+              <span className="text-xs font-bold uppercase tracking-wider theme-text-primary flex items-center space-x-1.5">
+                <Sliders className="w-3.5 h-3.5 text-blue-400" />
+                <span>Chế độ kết hợp khi nạp link:</span>
+              </span>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setMergeMode('MERGE')}
+                  className="py-1.5 px-2 rounded-lg font-semibold transition flex items-center justify-center space-x-1 text-center"
+                  style={{
+                    backgroundColor: mergeMode === 'MERGE' ? 'var(--accent-primary)' : 'var(--bg-surface)',
+                    color: mergeMode === 'MERGE' ? '#ffffff' : 'var(--text-secondary)'
+                  }}
+                >
+                  <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Gộp thông minh</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMergeMode('REPLACE')}
+                  className="py-1.5 px-2 rounded-lg font-semibold transition flex items-center justify-center space-x-1 text-center"
+                  style={{
+                    backgroundColor: mergeMode === 'REPLACE' ? 'var(--accent-primary)' : 'var(--bg-surface)',
+                    color: mergeMode === 'REPLACE' ? '#ffffff' : 'var(--text-secondary)'
+                  }}
+                >
+                  <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Tạo bài mới</span>
+                </button>
+              </div>
             </div>
 
             <div className="space-y-1.5">
@@ -455,7 +563,7 @@ export default function ImportModal({ isOpen, onClose, initialTab = 'file' }) {
                     setGdocUrl(e.target.value);
                     setGdocError(null);
                   }}
-                  placeholder="https://docs.google.com/document/d/1BxiMVs0XRA5nFMdKvBdB.../edit"
+                  placeholder="https://docs.google.com/document/d/... hoặc https://docs.google.com/presentation/d/..."
                   className="w-full px-3.5 py-2.5 rounded-xl text-xs theme-bg-elevated theme-border border theme-text-primary focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
                 />
               </div>
@@ -482,7 +590,7 @@ export default function ImportModal({ isOpen, onClose, initialTab = 'file' }) {
               ) : (
                 <>
                   <Globe className="w-3.5 h-3.5" />
-                  <span>Tải & Bóc tách từ Link Google Docs</span>
+                  <span>Tải & Bóc tách từ Link Google Docs / Slides</span>
                 </>
               )}
             </button>
