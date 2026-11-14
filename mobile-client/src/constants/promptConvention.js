@@ -10,7 +10,7 @@ export const DEFAULT_SETTINGS = {
   autoScroll: false,
   autoScrollSpeed: 3,
   triggerPosition: 33,
-  debounceMs: 500,
+  debounceMs: 250,
   keyMapping: 'ARROWS',
   keepAwake: true,
   autoMinimizeOnStart: true

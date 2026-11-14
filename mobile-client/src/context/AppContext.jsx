@@ -481,26 +481,27 @@ export function AppProvider({ children }) {
     const target = Number(targetSlide);
     if (isNaN(target)) return;
 
-    connectionManager.send({
-      type: 'GOTO_SLIDE',
-      targetSlide: target,
-      force
-    });
+    const clampedTarget = Math.max(
+      1,
+      Math.min(presentationData.totalSlides || 1, target)
+    );
 
-    // Optimistic UI update
+    // Optimistic UI update BEFORE / WHILE sending message for 0ms response
     setPresentationData((prev) => ({
       ...prev,
-      currentSlide: Math.max(1, Math.min(prev.totalSlides, target))
+      currentSlide: Math.max(1, Math.min(prev.totalSlides || 1, clampedTarget))
     }));
+
+    connectionManager.send({
+      type: 'GOTO_SLIDE',
+      targetSlide: clampedTarget,
+      force
+    });
   };
 
   const stepSlide = (direction) => {
     // direction: 'NEXT' | 'PREV' | 'BLACKOUT'
-    connectionManager.send({
-      type: 'STEP_SLIDE',
-      direction
-    });
-
+    // Optimistic UI update BEFORE / WHILE sending message
     if (direction === 'NEXT') {
       setPresentationData((prev) => ({
         ...prev,
@@ -512,6 +513,11 @@ export function AppProvider({ children }) {
         currentSlide: Math.max(1, prev.currentSlide - 1)
       }));
     }
+
+    connectionManager.send({
+      type: 'STEP_SLIDE',
+      direction
+    });
   };
 
   const adjustDesync = (offset) => {

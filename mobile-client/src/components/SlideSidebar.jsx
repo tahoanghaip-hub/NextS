@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 
 export default function SlideSidebar({ onSelectSlide }) {
-  const { presentationData, goToSlide, connectionStatus } = useApp();
+  const { presentationData, goToSlide } = useApp();
   const activeCardRef = useRef(null);
 
   // Auto-scroll active card into view within the sidebar rail
@@ -25,35 +25,24 @@ export default function SlideSidebar({ onSelectSlide }) {
 
   const slides = presentationData.slides || [];
   const currentSlide = presentationData.currentSlide || 1;
+  const totalSlides = presentationData.totalSlides || slides.length;
 
   return (
-    <aside className="w-1/5 min-w-[68px] max-w-[110px] h-full border-r theme-border theme-bg-surface flex flex-col overflow-y-auto thin-scrollbar select-none shrink-0">
+    <aside className="w-[40px] min-w-[40px] max-w-[42px] h-full border-r theme-border theme-bg-surface flex flex-col items-center py-1.5 overflow-y-auto no-scrollbar select-none z-20 shrink-0">
       {/* ----------------------------------------------------- */}
-      {/* Header                                                 */}
+      {/* Compact Header                                         */}
       {/* ----------------------------------------------------- */}
-      <div className="py-2 px-1 border-b theme-border text-center sticky top-0 theme-bg-surface z-10 flex flex-col items-center">
-        <span className="text-[10px] sm:text-xs font-bold tracking-wider uppercase theme-text-secondary block truncate">
-          SLIDES ({presentationData.totalSlides || slides.length})
-        </span>
-        {connectionStatus?.mode === 'BLE' && (
-          <span
-            title="Chế độ BLE: Tối ưu băng thông - Ẩn ảnh"
-            className="text-[8px] sm:text-[9px] font-bold px-1.5 py-0.5 rounded-full border mt-1 truncate max-w-full"
-            style={{
-              backgroundColor: 'rgba(59, 130, 246, 0.12)',
-              borderColor: 'var(--accent-primary)',
-              color: 'var(--accent-primary)'
-            }}
-          >
-            Chế độ BLE (Tối ưu băng thông - Ẩn ảnh)
-          </span>
-        )}
+      <div
+        className="text-[10px] font-bold theme-text-secondary mb-1.5 select-none shrink-0"
+        title={`Tổng số ${totalSlides} slides`}
+      >
+        #{totalSlides}
       </div>
 
       {/* ----------------------------------------------------- */}
-      {/* Slide Cards List                                       */}
+      {/* Compact Slide Number Buttons                           */}
       {/* ----------------------------------------------------- */}
-      <div className="p-1.5 space-y-2 flex-1">
+      <div className="flex flex-col items-center w-full px-1">
         {slides.map((slide) => {
           const isActive = slide.slideNumber === currentSlide;
           const hasQA = Boolean(slide.qaContent && slide.qaContent.trim().length > 0);
@@ -63,63 +52,31 @@ export default function SlideSidebar({ onSelectSlide }) {
               key={slide.slideNumber}
               ref={isActive ? activeCardRef : null}
               onClick={() => handleCardClick(slide.slideNumber)}
-              className="w-full text-left rounded-xl p-1.5 transition-all duration-200 relative flex flex-col items-center group cursor-pointer focus:outline-none"
+              title={`Slide ${slide.slideNumber}: ${slide.title || ''}`}
+              className={`w-[32px] h-[32px] mb-1.5 rounded-lg flex items-center justify-center relative font-bold text-xs transition-all cursor-pointer focus:outline-none shrink-0 ${
+                isActive ? 'scale-105' : 'hover:opacity-90'
+              }`}
               style={{
-                borderWidth: isActive ? '2px' : '1px',
-                borderColor: isActive ? 'var(--accent-primary)' : 'var(--border-subtle)',
                 backgroundColor: isActive
-                  ? 'rgba(59, 130, 246, 0.16)'
+                  ? 'var(--accent-primary)'
                   : 'var(--bg-elevated)',
-                boxShadow: isActive ? '0 0 10px rgba(59, 130, 246, 0.25)' : 'none'
+                color: isActive ? '#ffffff' : 'var(--text-secondary)',
+                border: isActive ? 'none' : '1px solid var(--border-subtle)',
+                boxShadow: isActive
+                  ? '0 0 10px rgba(59, 130, 246, 0.45)'
+                  : 'none'
               }}
             >
-              {/* Q&A Micro-Badge indicator in top-right corner */}
+              {slide.slideNumber}
+
+              {/* Q&A Micro-Dot */}
               {hasQA && (
                 <span
-                  title="Có ghi chú Q&A mở rộng"
-                  className="absolute -top-1 -right-1 text-[9px] font-bold px-1 py-0.2 rounded-full border shadow-sm z-10"
-                  style={{
-                    backgroundColor: 'var(--trigger-zone-bg)',
-                    borderColor: 'var(--trigger-line-color)',
-                    color: 'var(--trigger-line-color)'
-                  }}
-                >
-                  Q&A
-                </span>
-              )}
-
-              {/* Slide Number Badge */}
-              <div
-                className="w-6 h-6 rounded-lg flex items-center justify-center font-bold text-xs mb-1"
-                style={{
-                  backgroundColor: isActive
-                    ? 'var(--accent-primary)'
-                    : 'var(--border-subtle)',
-                  color: isActive ? '#ffffff' : 'var(--text-primary)'
-                }}
-              >
-                {slide.slideNumber}
-              </div>
-
-              {/* Optional Thumbnail Image */}
-              {slide.thumbnailBase64 && connectionStatus?.mode !== 'BLE' && (
-                <img
-                  src={slide.thumbnailBase64}
-                  alt={`Thumbnail Slide ${slide.slideNumber}`}
-                  className="w-full aspect-video object-cover rounded mb-1 border theme-border"
+                  title="Có ghi chú Q&A"
+                  className="w-1.5 h-1.5 rounded-full absolute -top-0.5 -right-0.5 shadow-sm"
+                  style={{ backgroundColor: 'var(--trigger-line-color)' }}
                 />
               )}
-
-              {/* Slide Title Preview (3-5 words) */}
-              <span
-                className="text-[10px] leading-tight text-center line-clamp-2 w-full break-words"
-                style={{
-                  color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
-                  fontWeight: isActive ? '700' : '500'
-                }}
-              >
-                {slide.title || `Slide ${slide.slideNumber}`}
-              </span>
             </button>
           );
         })}

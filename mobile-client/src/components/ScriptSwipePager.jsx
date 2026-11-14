@@ -43,53 +43,38 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
   const isProgrammaticScrollRef = useRef(false);
   const programmaticScrollTimerRef = useRef(null);
   const debounceTimerRef = useRef(null);
+  const pendingCandidateSlideRef = useRef(null);
+  const currentActiveSlideRef = useRef(presentationData.currentSlide || 1);
+
   const userInteractingRef = useRef(false);
   const userTouchResumeTimerRef = useRef(null);
+
+  // Touch gesture coordinates for horizontal swipe between Screen 1 and Screen 2
+  const touchStartXRef = useRef(0);
+  const touchStartYRef = useRef(0);
+  const touchStartTimeRef = useRef(0);
 
   const currentSlide = presentationData.currentSlide || 1;
   const totalSlides = presentationData.totalSlides || 1;
   const slides = presentationData.slides || [];
 
+  // Keep currentActiveSlideRef synced with presentationData.currentSlide
+  useEffect(() => {
+    currentActiveSlideRef.current = presentationData.currentSlide;
+    if (pendingCandidateSlideRef.current === presentationData.currentSlide) {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+      pendingCandidateSlideRef.current = null;
+    }
+  }, [presentationData.currentSlide]);
+
   // -------------------------------------------------------------
-  // Expose scrollToSlide method to parent via ref
+  // Screen Switcher Helper
   // -------------------------------------------------------------
-  const scrollToSlide = useCallback((slideNum) => {
-    // Ensure we are viewing Screen 1 (Script View)
-    if (pagerRef.current && activePagerScreen !== 0) {
-      pagerRef.current.scrollTo({ left: 0, behavior: 'smooth' });
-      setActivePagerScreen(0);
-    }
-
-    // Set programmatic scroll lock for 700ms
-    isProgrammaticScrollRef.current = true;
-    if (programmaticScrollTimerRef.current) {
-      clearTimeout(programmaticScrollTimerRef.current);
-    }
-    programmaticScrollTimerRef.current = setTimeout(() => {
-      isProgrammaticScrollRef.current = false;
-      programmaticScrollTimerRef.current = null;
-    }, 700);
-
-    const targetEl = document.getElementById(`slide-block-${slideNum}`);
-    if (targetEl && scriptContainerRef.current) {
-      const container = scriptContainerRef.current;
-      const containerRect = container.getBoundingClientRect();
-      const targetRect = targetEl.getBoundingClientRect();
-      const triggerOffset = containerRect.height * (settings.triggerPosition / 100);
-
-      const targetScrollTop =
-        container.scrollTop + (targetRect.top - containerRect.top) - triggerOffset + 20;
-
-      container.scrollTo({
-        top: Math.max(0, targetScrollTop),
-        behavior: 'smooth'
-      });
-    }
-  }, [activePagerScreen, setActivePagerScreen, settings.triggerPosition]);
-
-  useImperativeHandle(ref, () => ({
-    scrollToSlide,
-    switchToScreen: (screenIndex) => {
+  const switchToScreen = useCallback(
+    (screenIndex) => {
       if (pagerRef.current) {
         pagerRef.current.scrollTo({
           left: screenIndex * pagerRef.current.clientWidth,
@@ -97,11 +82,56 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
         });
         setActivePagerScreen(screenIndex);
       }
-    }
+    },
+    [setActivePagerScreen]
+  );
+
+  // -------------------------------------------------------------
+  // Expose scrollToSlide & switchToScreen to parent via ref
+  // -------------------------------------------------------------
+  const scrollToSlide = useCallback(
+    (slideNum) => {
+      // Ensure we are viewing Screen 1 (Script View)
+      if (pagerRef.current && activePagerScreen !== 0) {
+        switchToScreen(0);
+      }
+
+      // Lock scroll detection during programmatic smooth scroll
+      isProgrammaticScrollRef.current = true;
+      if (programmaticScrollTimerRef.current) {
+        clearTimeout(programmaticScrollTimerRef.current);
+      }
+      programmaticScrollTimerRef.current = setTimeout(() => {
+        isProgrammaticScrollRef.current = false;
+        programmaticScrollTimerRef.current = null;
+      }, 700);
+
+      const targetEl = document.getElementById(`slide-block-${slideNum}`);
+      if (targetEl && scriptContainerRef.current) {
+        const container = scriptContainerRef.current;
+        const containerRect = container.getBoundingClientRect();
+        const targetRect = targetEl.getBoundingClientRect();
+        const triggerOffset = containerRect.height * (settings.triggerPosition / 100);
+
+        const targetScrollTop =
+          container.scrollTop + (targetRect.top - containerRect.top) - triggerOffset + 20;
+
+        container.scrollTo({
+          top: Math.max(0, targetScrollTop),
+          behavior: 'smooth'
+        });
+      }
+    },
+    [activePagerScreen, settings.triggerPosition, switchToScreen]
+  );
+
+  useImperativeHandle(ref, () => ({
+    scrollToSlide,
+    switchToScreen
   }));
 
   // -------------------------------------------------------------
-  // Horizontal Pager Scroll Listener
+  // Horizontal Pager Scroll & Touch Gesture Handlers
   // -------------------------------------------------------------
   const handlePagerScroll = (e) => {
     const el = e.currentTarget;
@@ -112,18 +142,32 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
     }
   };
 
-  const handleTabClick = (index) => {
-    if (pagerRef.current) {
-      pagerRef.current.scrollTo({
-        left: index * pagerRef.current.clientWidth,
-        behavior: 'smooth'
-      });
-      setActivePagerScreen(index);
+  const handleTouchStart = (e) => {
+    if (!e.touches || e.touches.length === 0) return;
+    touchStartXRef.current = e.touches[0].clientX;
+    touchStartYRef.current = e.touches[0].clientY;
+    touchStartTimeRef.current = Date.now();
+  };
+
+  const handleTouchEnd = (e) => {
+    if (!e.changedTouches || e.changedTouches.length === 0) return;
+    const deltaX = e.changedTouches[0].clientX - touchStartXRef.current;
+    const deltaY = e.changedTouches[0].clientY - touchStartYRef.current;
+
+    // Detect intentional horizontal swipe gesture (ignoring vertical scrolling)
+    if (Math.abs(deltaX) > 45 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25) {
+      if (deltaX < -45 && activePagerScreen === 0) {
+        // Swiped Right-to-Left on Screen 1 -> Switch to Screen 2 (Q&A)
+        switchToScreen(1);
+      } else if (deltaX > 45 && activePagerScreen === 1) {
+        // Swiped Left-to-Right on Screen 2 -> Switch to Screen 1 (Script)
+        switchToScreen(0);
+      }
     }
   };
 
   // -------------------------------------------------------------
-  // Screen 1: Trigger Line Detection + Debounce Engine
+  // Screen 1: Full-Span Slide Detection + Candidate Debounce Engine
   // -------------------------------------------------------------
   const handleScriptScroll = useCallback(() => {
     if (isProgrammaticScrollRef.current) return;
@@ -131,33 +175,85 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
     if (!container) return;
 
     const containerRect = container.getBoundingClientRect();
-    const triggerY = containerRect.top + containerRect.height * (settings.triggerPosition / 100);
+    const triggerViewportY =
+      containerRect.top + containerRect.height * (settings.triggerPosition / 100);
 
     const slideElements = container.querySelectorAll('[data-slide-number]');
-    let candidate = null;
+    if (!slideElements.length) return;
+
+    let detectedSlide = null;
+    let lastPassedSlide = null;
 
     for (const el of slideElements) {
       const rect = el.getBoundingClientRect();
-      if (rect.top <= triggerY && rect.bottom > triggerY) {
-        candidate = parseInt(el.getAttribute('data-slide-number'), 10);
+      const slideNum = parseInt(el.getAttribute('data-slide-number'), 10);
+      if (isNaN(slideNum)) continue;
+
+      // Full-span check: does this block span across the trigger line?
+      if (rect.top <= triggerViewportY + 12 && rect.bottom > triggerViewportY) {
+        detectedSlide = slideNum;
         break;
       }
-    }
 
-    if (candidate && candidate !== currentSlide) {
-      // Clear previous debounce timer
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
+      // Track last slide block whose top has crossed the trigger line
+      if (rect.top <= triggerViewportY + 12) {
+        lastPassedSlide = slideNum;
       }
-
-      debounceTimerRef.current = setTimeout(() => {
-        if (!isProgrammaticScrollRef.current && presentationData.isSyncLocked) {
-          goToSlide(candidate, false);
-        }
-        debounceTimerRef.current = null;
-      }, settings.debounceMs || 500);
     }
-  }, [currentSlide, goToSlide, presentationData.isSyncLocked, settings.debounceMs, settings.triggerPosition]);
+
+    if (detectedSlide === null) {
+      detectedSlide = lastPassedSlide;
+    }
+
+    if (detectedSlide === null) return;
+
+    // If candidate matches the already active slide, clear any pending timer
+    if (detectedSlide === currentActiveSlideRef.current) {
+      if (pendingCandidateSlideRef.current !== null) {
+        if (debounceTimerRef.current) {
+          clearTimeout(debounceTimerRef.current);
+          debounceTimerRef.current = null;
+        }
+        pendingCandidateSlideRef.current = null;
+      }
+      return;
+    }
+
+    // CRITICAL: If scrolling continues within the same pending candidate slide, DO NOT reset the timer!
+    if (pendingCandidateSlideRef.current === detectedSlide) {
+      return;
+    }
+
+    // Only when crossing into a NEW candidate slide, start fresh countdown
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+
+    pendingCandidateSlideRef.current = detectedSlide;
+    const effectiveDebounceMs = Math.min(settings.debounceMs || 250, 400);
+
+    debounceTimerRef.current = setTimeout(() => {
+      const finalSlide = pendingCandidateSlideRef.current;
+      pendingCandidateSlideRef.current = null;
+      debounceTimerRef.current = null;
+
+      if (
+        finalSlide &&
+        finalSlide !== currentActiveSlideRef.current &&
+        !isProgrammaticScrollRef.current &&
+        presentationData.isSyncLocked
+      ) {
+        currentActiveSlideRef.current = finalSlide;
+        goToSlide(finalSlide, false);
+      }
+    }, effectiveDebounceMs);
+  }, [
+    goToSlide,
+    presentationData.isSyncLocked,
+    settings.debounceMs,
+    settings.triggerPosition
+  ]);
 
   // Attach requestAnimationFrame throttled scroll listener
   useEffect(() => {
@@ -198,7 +294,6 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
         scriptContainerRef.current &&
         settings.autoScroll
       ) {
-        // Rate proportional to autoScrollSpeed (1 to 10)
         const speed = (settings.autoScrollSpeed || 3) * 0.35;
         scriptContainerRef.current.scrollTop += speed;
       }
@@ -226,7 +321,6 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
     if (userTouchResumeTimerRef.current) {
       clearTimeout(userTouchResumeTimerRef.current);
     }
-    // Resume auto-scrolling 1.5s after touch ends
     userTouchResumeTimerRef.current = setTimeout(() => {
       userInteractingRef.current = false;
       userTouchResumeTimerRef.current = null;
@@ -247,11 +341,13 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
 
   const currentSlideObj = slides.find((s) => s.slideNumber === currentSlide);
   const currentHasQA = Boolean(
-    currentSlideObj && currentSlideObj.qaContent && currentSlideObj.qaContent.trim().length > 0
+    currentSlideObj &&
+      currentSlideObj.qaContent &&
+      currentSlideObj.qaContent.trim().length > 0
   );
 
   return (
-    <main className="w-4/5 flex-1 h-full relative flex flex-col overflow-hidden theme-bg-app">
+    <main className="flex-1 h-full relative flex flex-col overflow-hidden theme-bg-app min-w-0">
       {/* --------------------------------------------------------- */}
       {/* Top Screen Switcher Pill Bar (Height: 32px)               */}
       {/* --------------------------------------------------------- */}
@@ -259,7 +355,7 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
         <div className="flex items-center space-x-1.5 w-full">
           {/* Tab 1: Script */}
           <button
-            onClick={() => handleTabClick(0)}
+            onClick={() => switchToScreen(0)}
             className="flex-1 py-1 px-2 rounded-lg text-xs font-semibold flex items-center justify-center space-x-1.5 transition-all truncate"
             style={{
               backgroundColor:
@@ -284,7 +380,7 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
 
           {/* Tab 2: Q&A */}
           <button
-            onClick={() => handleTabClick(1)}
+            onClick={() => switchToScreen(1)}
             className="flex-1 py-1 px-2 rounded-lg text-xs font-semibold flex items-center justify-center space-x-1.5 transition-all truncate"
             style={{
               backgroundColor:
@@ -320,37 +416,35 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
       <div
         ref={pagerRef}
         onScroll={handlePagerScroll}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
         className="swipe-pager-container flex-1 relative"
       >
         {/* ======================================================= */}
         {/* SCREEN 1: KỊCH BẢN THUYẾT TRÌNH (MAIN SCRIPT VIEW)      */}
         {/* ======================================================= */}
         <section className="swipe-pager-page relative flex flex-col h-full overflow-hidden">
-          {/* Visual Trigger Line Overlay (Fixed across Screen 1) */}
+          {/* Non-intrusive Tiny Side Edge Trigger Marker (hugging left edge) */}
           <div
-            className="absolute inset-x-0 pointer-events-none z-20 transition-all duration-300"
+            className="absolute left-0.5 pointer-events-none z-20 -translate-y-1/2 flex items-center transition-all duration-200"
             style={{ top: `${settings.triggerPosition}%` }}
+            aria-label={`Vạch chuyển slide (${settings.triggerPosition}%)`}
+            title={`Vạch chuyển slide (${settings.triggerPosition}%)`}
           >
-            {/* Highlighted reading band */}
             <div
-              className="w-full -translate-y-1/2 flex items-center justify-between px-3"
+              className="w-0 h-0 border-y-[5px] border-y-transparent border-l-[7px]"
               style={{
-                height: '48px',
-                backgroundColor: 'var(--trigger-zone-bg)'
+                borderLeftColor: 'var(--trigger-line-color)',
+                filter: 'drop-shadow(0 0 4px var(--trigger-line-color))'
               }}
-            >
-              <div className="w-full border-b-2 border-dashed" style={{ borderColor: 'var(--trigger-line-color)' }} />
-              <div
-                className="shrink-0 ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wide uppercase border shadow-sm"
-                style={{
-                  backgroundColor: 'var(--bg-surface)',
-                  borderColor: 'var(--trigger-line-color)',
-                  color: 'var(--trigger-line-color)'
-                }}
-              >
-                VẠCH CHUYỂN SLIDE ({settings.triggerPosition}%)
-              </div>
-            </div>
+            />
+            <div
+              className="w-1.5 h-1.5 rounded-full ml-0.5 shadow-sm"
+              style={{
+                backgroundColor: 'var(--trigger-line-color)',
+                boxShadow: '0 0 6px var(--trigger-line-color)'
+              }}
+            />
           </div>
 
           {/* Script Sections Scrollable List */}
@@ -417,7 +511,7 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
 
                       {/* Quick Jump to Q&A for this slide */}
                       <button
-                        onClick={() => handleTabClick(1)}
+                        onClick={() => switchToScreen(1)}
                         className="text-xs flex items-center space-x-1 px-2.5 py-1 rounded-lg theme-border border theme-bg-elevated theme-text-secondary hover:theme-text-primary transition"
                       >
                         <MessageSquare className="w-3.5 h-3.5 text-blue-400" />
@@ -436,35 +530,36 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
             </div>
           </div>
 
-          {/* Floating Bottom Controls Overlay (Screen 1) */}
-          <div className="absolute bottom-3 right-3 left-3 flex items-center justify-between gap-1.5 pointer-events-none z-20">
-            {/* Left Cluster: Anti-Desync Recovery */}
-            <div className="pointer-events-auto flex items-center space-x-1 theme-bg-surface theme-border border p-1 rounded-2xl shadow-xl backdrop-blur-md">
+          {/* Compact Floating Bottom Controls Overlay (Screen 1) */}
+          <div className="absolute bottom-2.5 left-2 right-2 flex items-center justify-between gap-1 pointer-events-none z-20">
+            {/* Left Pill Group: Anti-Desync Offset Adjustments */}
+            <div className="pointer-events-auto flex items-center gap-1 px-1.5 py-1 rounded-full border theme-border shadow-lg theme-bg-surface backdrop-blur-md">
               <button
                 onClick={() => adjustDesync(-1)}
-                title="Bù lùi 1 slide trên máy chiếu (Không đổi kịch bản điện thoại)"
-                className="flex items-center space-x-1 px-2 py-1 rounded-xl text-xs font-bold theme-bg-elevated theme-text-primary hover:opacity-80 transition"
+                title="Bù lùi 1 slide trên máy chiếu (Không đổi kịch bản)"
+                className="flex items-center space-x-1 px-2 py-1 text-[11px] font-semibold rounded-full theme-bg-elevated theme-text-primary hover:opacity-80 active:scale-95 transition"
               >
-                <Sliders className="w-3 h-3 text-amber-400" />
+                <Sliders className="w-2.5 h-2.5 text-amber-400" />
                 <span>-1 Lệch</span>
               </button>
+
               <button
                 onClick={() => adjustDesync(1)}
-                title="Bù tiến 1 slide trên máy chiếu (Không đổi kịch bản điện thoại)"
-                className="flex items-center space-x-1 px-2 py-1 rounded-xl text-xs font-bold theme-bg-elevated theme-text-primary hover:opacity-80 transition"
+                title="Bù tiến 1 slide trên máy chiếu (Không đổi kịch bản)"
+                className="flex items-center space-x-1 px-2 py-1 text-[11px] font-semibold rounded-full theme-bg-elevated theme-text-primary hover:opacity-80 active:scale-95 transition"
               >
-                <Sliders className="w-3 h-3 text-amber-400" />
+                <Sliders className="w-2.5 h-2.5 text-amber-400" />
                 <span>+1 Lệch</span>
               </button>
             </div>
 
-            {/* Right Cluster: Presentation Step & Auto-Scroll Controls */}
-            <div className="pointer-events-auto flex items-center space-x-1.5 theme-bg-surface theme-border border p-1 rounded-2xl shadow-xl backdrop-blur-md">
+            {/* Right Pill Group: Compact Playback & Step Controls */}
+            <div className="pointer-events-auto flex items-center gap-1 px-1.5 py-1 rounded-full border theme-border shadow-lg theme-bg-surface backdrop-blur-md">
               {/* Auto-Scroll Toggle */}
               <button
                 onClick={() => updateSetting('autoScroll', !settings.autoScroll)}
                 title={settings.autoScroll ? 'Tắt tự động cuộn chữ' : 'Bật tự động cuộn chữ'}
-                className="p-2 rounded-xl text-xs font-bold transition flex items-center justify-center"
+                className="w-7 h-7 rounded-full flex items-center justify-center transition active:scale-95"
                 style={{
                   backgroundColor: settings.autoScroll
                     ? 'rgba(59, 130, 246, 0.25)'
@@ -475,9 +570,9 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
                 }}
               >
                 {settings.autoScroll ? (
-                  <Pause className="w-4 h-4 fill-current" />
+                  <Pause className="w-3.5 h-3.5 fill-current" />
                 ) : (
-                  <Play className="w-4 h-4" />
+                  <Play className="w-3.5 h-3.5" />
                 )}
               </button>
 
@@ -485,9 +580,9 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
               <button
                 onClick={() => stepSlide('BLACKOUT')}
                 title="Tắt đen / Mở lại màn hình máy chiếu (Phím B)"
-                className="p-2 rounded-xl text-xs font-bold theme-bg-elevated theme-text-primary hover:opacity-80 transition flex items-center justify-center"
+                className="w-7 h-7 rounded-full flex items-center justify-center theme-bg-elevated theme-text-primary hover:opacity-80 active:scale-95 transition"
               >
-                <EyeOff className="w-4 h-4 text-rose-400" />
+                <EyeOff className="w-3.5 h-3.5 text-rose-400" />
               </button>
 
               {/* Prev Slide Button */}
@@ -495,9 +590,9 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
                 onClick={() => stepSlide('PREV')}
                 title="Lùi 1 slide"
                 disabled={currentSlide <= 1}
-                className="p-2 rounded-xl text-xs font-bold theme-bg-elevated theme-text-primary hover:opacity-80 disabled:opacity-30 transition flex items-center justify-center"
+                className="w-7 h-7 rounded-full flex items-center justify-center theme-bg-elevated theme-text-primary hover:opacity-80 disabled:opacity-30 active:scale-95 transition"
               >
-                <ChevronLeft className="w-5 h-5" />
+                <ChevronLeft className="w-4 h-4" />
               </button>
 
               {/* Next Slide Button */}
@@ -505,10 +600,9 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
                 onClick={() => stepSlide('NEXT')}
                 title="Tiến 1 slide"
                 disabled={currentSlide >= totalSlides}
-                className="px-3 py-2 rounded-xl text-xs font-bold text-white transition hover:opacity-90 disabled:opacity-30 flex items-center justify-center space-x-1 shadow-sm"
+                className="w-7 h-7 rounded-full flex items-center justify-center text-white hover:opacity-90 disabled:opacity-30 active:scale-95 transition shadow-sm"
                 style={{ backgroundColor: 'var(--accent-primary)' }}
               >
-                <span>Tiến</span>
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>
@@ -523,14 +617,14 @@ const ScriptSwipePager = forwardRef(function ScriptSwipePager(
           className="swipe-pager-page relative flex flex-col h-full overflow-y-auto px-4 md:px-8 py-5 thin-scrollbar select-text"
         >
           <div className="max-w-3xl mx-auto w-full space-y-6 pb-20">
-            {/* Quick Return Hint Pill */}
+            {/* Interactive Return Banner to Screen 1 */}
             <div className="flex items-center justify-between">
               <button
-                onClick={() => handleTabClick(0)}
-                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-medium theme-border border theme-bg-surface theme-text-secondary hover:theme-text-primary transition shadow-sm"
+                onClick={() => switchToScreen(0)}
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-semibold theme-border border theme-bg-surface theme-text-secondary hover:theme-text-primary active:scale-95 transition shadow-sm cursor-pointer"
               >
-                <ArrowLeft className="w-3.5 h-3.5" />
-                <span>Vuốt sang phải để quay lại Kịch bản Slide {currentSlide}</span>
+                <ArrowLeft className="w-3.5 h-3.5 text-blue-400" />
+                <span>← Vuốt sang phải để quay lại Kịch bản Slide {currentSlide}</span>
               </button>
             </div>
 

@@ -39,6 +39,7 @@ const upload = multer({
 // In-memory presentation state and active key mapping
 let presentationData = structuredClone(defaultPresentationData);
 let currentKeyMapping = 'ARROWS';
+keyController.setCurrentSlide(presentationData.currentSlide);
 
 // Create HTTP Server & WebSocket Server
 const server = http.createServer(app);
@@ -163,6 +164,7 @@ async function handleUnifiedCommand(msg, source = 'WIFI') {
         // Free preview mode without emulating hardware keys
         presentationData.currentSlide = clampedTarget;
         presentationData.updatedAt = Date.now();
+        keyController.setCurrentSlide(clampedTarget);
         broadcastStateSync();
       }
       break;
@@ -175,9 +177,11 @@ async function handleUnifiedCommand(msg, source = 'WIFI') {
       if (direction === 'NEXT' && presentationData.currentSlide < presentationData.totalSlides) {
         presentationData.currentSlide += 1;
         presentationData.updatedAt = Date.now();
+        keyController.setCurrentSlide(presentationData.currentSlide);
       } else if (direction === 'PREV' && presentationData.currentSlide > 1) {
         presentationData.currentSlide -= 1;
         presentationData.updatedAt = Date.now();
+        keyController.setCurrentSlide(presentationData.currentSlide);
       }
 
       broadcastStateSync();
@@ -224,6 +228,7 @@ async function handleUnifiedCommand(msg, source = 'WIFI') {
           totalSlides: msg.payload.slides.length,
           updatedAt: Date.now()
         };
+        keyController.setCurrentSlide(presentationData.currentSlide);
         broadcastStateSync();
       }
       break;

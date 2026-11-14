@@ -12,6 +12,7 @@ class KeyController {
     this.psProcess = null;
     this.jumpQueue = Promise.resolve();
     this.isJumping = false;
+    this.currentSlide = 1;
 
     if (this.isWin) {
       this.initPowerShellBridge();
@@ -99,28 +100,47 @@ class KeyController {
     }
   }
 
+  setCurrentSlide(slideNum) {
+    const num = Number(slideNum);
+    if (!isNaN(num) && num > 0) {
+      this.currentSlide = num;
+    }
+  }
+
   jumpToSlide(currentSlide, targetSlide, keyMappingMode = 'ARROWS') {
+    // Sync initial position if not currently jumping
+    if (typeof currentSlide === 'number' && !this.isJumping) {
+      this.currentSlide = currentSlide;
+    }
+
     // Sequential mutex queue to prevent overlapping scroll/jump requests
     this.jumpQueue = this.jumpQueue.then(async () => {
       this.isJumping = true;
       try {
-        const delta = targetSlide - currentSlide;
+        const fromSlide = this.currentSlide || currentSlide || 1;
+        const delta = targetSlide - fromSlide;
         if (delta === 0) {
+          this.currentSlide = targetSlide;
           return { currentSlide: targetSlide, stepsSent: 0 };
         }
 
         const direction = delta > 0 ? 'NEXT' : 'PREV';
         const steps = Math.abs(delta);
 
-        console.log(`[KeyController] Executing jump: slide ${currentSlide} -> ${targetSlide} (${steps} x ${direction})`);
+        console.log(`[KeyController] Executing jump: slide ${fromSlide} -> ${targetSlide} (${steps} x ${direction})`);
 
         for (let i = 0; i < steps; i++) {
           this.sendSingleKey(direction, keyMappingMode);
+          this.currentSlide += (direction === 'NEXT' ? 1 : -1);
           // 50ms universal step delay for reliable presentation app key-event registration
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
 
+        this.currentSlide = targetSlide;
         return { currentSlide: targetSlide, stepsSent: steps };
+      } catch (err) {
+        console.error('[KeyController] Jump error:', err);
+        return { currentSlide: this.currentSlide, stepsSent: 0, error: err.message };
       } finally {
         this.isJumping = false;
       }
